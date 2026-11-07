@@ -14,6 +14,7 @@ import { LabelLayer } from './LabelLayer';
 import type { LabelItem, LabelRegistry } from './LabelLayer';
 import { Minimap } from './Minimap';
 import { TripFx } from './Fx';
+import { CanvasBoundary } from './CanvasBoundary';
 
 const SHAFT_Y = 0.85;
 const FLOOR_Y = -0.32;
@@ -537,9 +538,11 @@ export function Viewport({ sim, snap, paused, onTogglePause, muted, onToggleMute
 
   return (
     <div className="relative h-full w-full" onPointerDown={onUserGesture}>
-      <Canvas shadows dpr={[1, 1.75]} camera={{ position: HOME_POS, fov: 38, near: 0.1, far: 100 }} gl={{ antialias: true }}>
-        <World sim={sim} slowMo={slowMo} registry={registry} shot={shot} walkActive={walk.active} />
-      </Canvas>
+      <CanvasBoundary>
+        <Canvas shadows dpr={[1, 1.75]} camera={{ position: HOME_POS, fov: 38, near: 0.1, far: 100 }} gl={{ antialias: true }}>
+          <World sim={sim} slowMo={slowMo} registry={registry} shot={shot} walkActive={walk.active} />
+        </Canvas>
+      </CanvasBoundary>
 
       <LabelLayer registry={registry} items={items} />
 
