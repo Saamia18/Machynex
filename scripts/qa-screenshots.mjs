@@ -68,8 +68,8 @@ for (const vp of VIEWPORTS) {
     return false;
   };
   const did = {
-    progressive: await clickIf(/progressive|1X imbalance/i, 'progressive'),
-    trip: await clickIf(/critical trip|severe fault/i, 'trip'),
+    progressive: await clickIf(/progressive|imbalance/i, 'progressive'),
+    trip: await clickIf(/critical trip|critical fault|severe fault/i, 'trip'),
   };
 
   console.log(`\n=== ${vp.name}`);
