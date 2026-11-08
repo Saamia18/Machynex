@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import * as THREE from 'three';
 import type { Mount } from '../../sim/mounts';
-import { IR_BRACKET_BASE, SHAFT_Y } from '../../sim/mounts';
+import { IR_BRACKET_BASE, SHAFT_Y, irBarrel } from '../../sim/mounts';
 import type { V3 } from '../../sim/shots';
 import { Box, Cyl, Selectable } from './primitives';
 
@@ -35,16 +35,15 @@ export function TempProbe({ mount, bandRadius = 0.52 }: { mount: Mount; bandRadi
  * Concept kit: MLX90614 in an M12 stainless barrel on a 2-axis bracket (post + slotted arm), aimed at the drive-end stator.
  * The bracket stands on the base plate (static); no glow, no measurement cone.
  */
-export function IrPod({ mount }: { mount: Mount }) {
-  const base = IR_BRACKET_BASE;
-  const barrel: V3 = [base[0] - 0.05, 0.98, base[2] - 0.1];
+export function IrPod({ mount, base = IR_BRACKET_BASE, barrelY = 0.98 }: { mount: Mount; base?: V3; barrelY?: number }) {
+  const barrel: V3 = irBarrel(base, barrelY);
   const q = useMemo(() => {
     const dir = new THREE.Vector3(mount.pos[0] - barrel[0], mount.pos[1] - barrel[1], mount.pos[2] - barrel[2]).normalize();
     return new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
-  }, [mount.pos]); // eslint-disable-line react-hooks/exhaustive-deps
-  const postTop = 0.86;
+  }, [mount.pos, base, barrelY]); // eslint-disable-line react-hooks/exhaustive-deps
+  const postTop = barrelY - 0.12;
   return (
-    <Selectable id="temperature" center={[barrel[0], 0.62, barrel[2] + 0.04]} size={[0.34, 1.2, 0.36]}>
+    <Selectable id="temperature" center={[barrel[0], (barrelY + 0.15) / 2, barrel[2] + 0.04]} size={[0.34, barrelY + 0.25, 0.36]}>
       <group>
         {/* foot plate + bolts */}
         <Box size={[0.18, 0.02, 0.18]} pos={[base[0], base[1] + 0.01, base[2]]} color="#52525b" metal={0.7} rough={0.4} />

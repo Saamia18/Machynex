@@ -10,9 +10,11 @@ import type { WalkState } from '../sim/walkthrough';
 import { CONFIG as C } from '../sim/config';
 import { HOME_POS, HOME_TARGET } from '../sim/shots';
 import type { CameraShot, ShotName, V3 } from '../sim/shots';
-import { BENCH_MOUNTS, FLOOR_Y, HARNESS, HARNESS_BENCH_SIGNAL, HARNESS_INDUSTRIAL, NODE, PLATE_TOP, SHAFT_Y } from '../sim/mounts';
+import { FLOOR_Y, HARNESS, NODE, PLATE_TOP, RIGS, SHAFT_Y, irRoute } from '../sim/mounts';
 import type { SensorKit } from '../sim/mounts';
 import type { HardwareId } from '../sim/hardwareSpecs';
+import { ASSETS, CONCEPT_ASSET_TAG } from '../sim/assets';
+import type { AssetId } from '../sim/assets';
 import type { LabelRegistry } from './LabelLayer';
 import { SeverityBar } from './SeverityBar';
 import { Minimap } from './Minimap';
@@ -21,9 +23,10 @@ import { CanvasBoundary } from './CanvasBoundary';
 import { Box, Cable, Cyl, PickContext, applyXray, useBraidTexture } from './hardware/primitives';
 import { EdgeNode } from './hardware/EdgeNode';
 import type { NodeLeds } from './hardware/EdgeNode';
-import { VibrationPuck } from './hardware/VibrationPuck';
-import { CurrentSensor } from './hardware/CurrentSensor';
-import { IrPod, TempProbe } from './hardware/TempSensor';
+import { IrPod } from './hardware/TempSensor';
+import { MachineHardware, applyHeat } from './machines/common';
+import { PumpRig } from './machines/PumpRig';
+import { GearboxRig } from './machines/GearboxRig';
 
 // ------------------------------------------------------------------ static rig (does not vibrate)
 const BaseRig = memo(function BaseRig() {
@@ -84,8 +87,10 @@ interface MachineProps {
   slowMo: number;
   kit: SensorKit;
   hostRef: RefObject<THREE.Group>;
+  /** 'dc' = the proposal's 12 V bench motor; 'induction' = concept 0.5 HP induction motor on the same frame */
+  variant?: 'dc' | 'induction';
 }
-const Machine = memo(function Machine({ sim, slowMo, kit, hostRef }: MachineProps) {
+const Machine = memo(function Machine({ sim, slowMo, kit, hostRef, variant = 'dc' }: MachineProps) {
   const mach = useRef<THREE.Group>(null);
   const wob = useRef<THREE.Group>(null);
   const rot = useRef<THREE.Group>(null);
@@ -96,18 +101,17 @@ const Machine = memo(function Machine({ sim, slowMo, kit, hostRef }: MachineProp
   const braid = useBraidTexture();
 
   // one shared material for the can and its fins, so the heat map lights the whole housing (and keeps working in X-ray)
+  const baseHex = variant === 'induction' ? '#3b4a5c' : '#2b4a52';
   const motorMat = useMemo(() => {
     return new THREE.MeshStandardMaterial({
-      color: '#2b4a52', metalness: 0.7, roughness: 0.42, roughnessMap: makeBrushedTexture(),
+      color: baseHex, metalness: 0.7, roughness: 0.42, roughnessMap: makeBrushedTexture(),
       emissive: new THREE.Color('#0d2a30'), emissiveIntensity: 0.25,
     });
-  }, []);
-  useEffect(() => () => { motorMat.dispose(); }, [motorMat]);
+  }, [baseHex]);
+  // dispose the procedural roughness texture too: material.dispose() does not free its maps
+  useEffect(() => () => { motorMat.roughnessMap?.dispose(); motorMat.dispose(); }, [motorMat]);
 
-  const col = useMemo(() => ({
-    cool: new THREE.Color('#0d2a30'), orange: new THREE.Color('#ff6a1a'), red: new THREE.Color('#ff2a0a'),
-    baseCool: new THREE.Color('#2b4a52'), baseHot: new THREE.Color('#5a2a1c'), tmp: new THREE.Color(),
-  }), []);
+  const col = useMemo(() => ({ base: new THREE.Color(baseHex), tmp: new THREE.Color() }), [baseHex]);
 
   useFrame((state, delta) => {
     const L = sim.live;
@@ -138,16 +142,8 @@ const Machine = memo(function Machine({ sim, slowMo, kit, hostRef }: MachineProp
       wob.current.rotation.z = tilt * Math.cos(angle.current);
     }
 
-    // heat map: slate/teal until ~40 C, warm tint to 60 C, then orange to red up to 95 C (range retuned in Phase 3, D12)
-    const T = L.temp;
-    let k = 0;
-    if (T > 60) k = 0.25 + 0.75 * THREE.MathUtils.clamp((T - 60) / 35, 0, 1);
-    else if (T > 40) k = 0.25 * THREE.MathUtils.clamp((T - 40) / 20, 0, 1);
-    if (k < 0.6) col.tmp.copy(col.cool).lerp(col.orange, k / 0.6);
-    else col.tmp.copy(col.orange).lerp(col.red, (k - 0.6) / 0.4);
-    motorMat.emissive.copy(col.tmp);
-    motorMat.emissiveIntensity = 0.2 + 2.1 * Math.pow(k, 1.6);
-    motorMat.color.copy(col.baseCool).lerp(col.baseHot, k * 0.6);
+    // thermal map (D12): slate/teal below 45 C, amber through the band, red above 75 C
+    applyHeat(motorMat, col.base, L.temp, col.tmp);
 
     // eccentric mass: size follows the slider and it flexes radially when the rotor is shaking
     if (massGrp.current) {
@@ -158,7 +154,6 @@ const Machine = memo(function Machine({ sim, slowMo, kit, hostRef }: MachineProp
   });
 
   const holeAngles = useMemo(() => Array.from({ length: 8 }, (_, i) => (i / 8) * Math.PI * 2), []);
-  const m = BENCH_MOUNTS;
 
   return (
     <group ref={mach}>
@@ -183,6 +178,8 @@ const Machine = memo(function Machine({ sim, slowMo, kit, hostRef }: MachineProp
         ))}
         {/* rear cap with vent slits */}
         <Cyl r={0.45} len={0.14} pos={[-2.52, SHAFT_Y, 0]} axis="x" color="#18232a" metal={0.55} rough={0.4} />
+        {/* TEFC fan cowl (induction motor variant only) */}
+        {variant === 'induction' && <Cyl r={0.46} len={0.18} pos={[-2.67, SHAFT_Y, 0]} axis="x" color="#1e293b" metal={0.5} rough={0.5} />}
         {Array.from({ length: 8 }, (_, i) => (
           <group key={i} position={[-2.6, SHAFT_Y, 0]} rotation={[(i / 8) * Math.PI * 2, 0, 0]}>
             <Box size={[0.02, 0.15, 0.05]} pos={[0, 0.27, 0]} color="#05080a" cast={false} />
@@ -233,20 +230,7 @@ const Machine = memo(function Machine({ sim, slowMo, kit, hostRef }: MachineProp
       </group>
 
       {/* ---------------- Machynex sensor hardware (stays opaque in X-ray) ---------------- */}
-      <VibrationPuck mount={m.puck} />
-      <Cable points={HARNESS.puck} radius={0.022} color="#ffffff" texture={braid} metal={0.6} rough={0.4} />
-
-      {kit === 'bench' && (
-        <>
-          <TempProbe mount={m.temp} />
-          <Cable points={HARNESS.tempProbe} radius={0.012} color="#d4d4d8" />
-        </>
-      )}
-
-      <CurrentSensor mount={m.current} kit={kit} />
-      {kit === 'bench'
-        ? <Cable points={HARNESS_BENCH_SIGNAL} radius={0.011} color="#52525b" />
-        : <Cable points={HARNESS_INDUSTRIAL.ctOut} radius={0.013} color="#111113" />}
+      <MachineHardware rig={RIGS['bench-dc']} kit={kit} braid={braid} />
     </group>
   );
 });
@@ -329,6 +313,16 @@ function CameraDirector({ shot }: { shot: CameraShot | null }) {
   return null;
 }
 
+/** dev builds only: expose the renderer so QA can read renderer.info (geometry/texture counts across asset switches) */
+function DevRendererHandle() {
+  const gl = useThree((s) => s.gl);
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    (window as unknown as { __mxRenderer?: THREE.WebGLRenderer }).__mxRenderer = gl;
+  }, [gl]);
+  return null;
+}
+
 // procedural image-based lighting (no HDR download), so metals have something to reflect
 function EnvLight() {
   const gl = useThree((s) => s.gl);
@@ -355,9 +349,20 @@ interface WorldProps {
   walkActive: boolean;
   kit: SensorKit;
   xray: boolean;
+  asset: AssetId;
 }
 
-function World({ sim, slowMo, registry, shot, walkActive, kit, xray }: WorldProps) {
+function ActiveMachine({ asset, sim, slowMo, kit, hostRef }: { asset: AssetId; sim: Simulator; slowMo: number; kit: SensorKit; hostRef: RefObject<THREE.Group> }) {
+  // keyed by asset: switching unmounts the old machine and R3F disposes its geometries/materials
+  switch (asset) {
+    case 'slurry-pump': return <PumpRig key={asset} sim={sim} slowMo={slowMo} kit={kit} hostRef={hostRef} />;
+    case 'helical-gearbox': return <GearboxRig key={asset} sim={sim} slowMo={slowMo} kit={kit} hostRef={hostRef} />;
+    case 'induction-05hp': return <Machine key={asset} sim={sim} slowMo={slowMo} kit={kit} hostRef={hostRef} variant="induction" />;
+    default: return <Machine key={asset} sim={sim} slowMo={slowMo} kit={kit} hostRef={hostRef} />;
+  }
+}
+
+function World({ sim, slowMo, registry, shot, walkActive, kit, xray, asset }: WorldProps) {
   const g = useRef<THREE.MeshStandardMaterial>(null);
   const a = useRef<THREE.MeshStandardMaterial>(null);
   const r = useRef<THREE.MeshStandardMaterial>(null);
@@ -370,13 +375,16 @@ function World({ sim, slowMo, registry, shot, walkActive, kit, xray }: WorldProp
   useEffect(() => {
     applyXray(baseRef.current, xray);
     applyXray(hostRef.current, xray);
-  }, [xray]);
+  }, [xray, asset]);
+  const rig = RIGS[asset];
+  const irCable = useMemo(() => irRoute(rig.irBase, rig.irBarrelY, rig.mounts.temp.pos), [rig]);
 
   return (
     <>
       <color attach="background" args={['#09090b']} />
       <fog attach="fog" args={['#09090b', 18, 42]} />
       <EnvLight />
+      <DevRendererHandle />
       <ambientLight intensity={0.25} />
       <hemisphereLight args={['#9fb4ff', '#1a1a22', 0.35]} />
       <directionalLight position={[6, 9, 5]} intensity={2.0} castShadow shadow-mapSize-width={1024} shadow-mapSize-height={1024} shadow-camera-left={-8} shadow-camera-right={8} shadow-camera-top={8} shadow-camera-bottom={-8} />
@@ -390,17 +398,17 @@ function World({ sim, slowMo, registry, shot, walkActive, kit, xray }: WorldProp
       <gridHelper args={[40, 40, '#1e293b', '#12151c']} position={[0, FLOOR_Y, 0]} />
 
       <group ref={baseRef}><BaseRig /></group>
-      <Machine sim={sim} slowMo={slowMo} kit={kit} hostRef={hostRef} />
+      <ActiveMachine asset={asset} sim={sim} slowMo={slowMo} kit={kit} hostRef={hostRef} />
 
       {/* static Machynex hardware: edge node, 12 V adapter, (concept kit) IR pod on its bracket */}
       <EdgeNode sim={sim} kit={kit} xray={xray} leds={leds} />
       <Box size={[0.8, 0.26, 0.5]} pos={[-1.9, FLOOR_Y + 0.13, 2.3]} color="#27272a" metal={0.2} rough={0.7} />
       <Cable points={HARNESS.supply} radius={0.025} />
       {kit === 'industrial' && (
-        <>
-          <IrPod mount={BENCH_MOUNTS.temp} />
-          <Cable points={HARNESS_INDUSTRIAL.irTemp} radius={0.013} color="#d4d4d8" />
-        </>
+        <group key={asset}>
+          <IrPod mount={rig.mounts.temp} base={rig.irBase} barrelY={rig.irBarrelY} />
+          <Cable points={irCable} radius={0.013} color="#d4d4d8" />
+        </group>
       )}
 
       <TripFx sim={sim} />
@@ -457,7 +465,7 @@ export function Viewport({ sim, snap, paused, onTogglePause, muted, onToggleMute
       <CanvasBoundary>
         <Canvas shadows dpr={[1, 1.75]} camera={{ position: HOME_POS, fov: 38, near: 0.1, far: 100 }} gl={{ antialias: true }}>
           <PickContext.Provider value={pick}>
-            <World sim={sim} slowMo={slowMo} registry={registry} shot={shot} walkActive={walk.active} kit={kit} xray={xray} />
+            <World sim={sim} slowMo={slowMo} registry={registry} shot={shot} walkActive={walk.active} kit={kit} xray={xray} asset={snap.asset} />
           </PickContext.Provider>
         </Canvas>
       </CanvasBoundary>
@@ -481,7 +489,13 @@ export function Viewport({ sim, snap, paused, onTogglePause, muted, onToggleMute
         </div>
       )}
 
-      {kit === 'industrial' && (
+      {ASSETS[snap.asset].scope === 'concept' ? (
+        <div className="pointer-events-none absolute right-3 top-3 max-w-[20rem] rounded-md border border-line bg-panel px-3 py-2 text-[11px] leading-snug text-zinc-400" role="note">
+          <div className="font-mono text-warn">{CONCEPT_ASSET_TAG}</div>
+          <div className="mt-0.5 text-zinc-300">{ASSETS[snap.asset].name}</div>
+          <div className="mt-0.5">Industrial-retrofit kit (concept, not in the proposed bill of materials).</div>
+        </div>
+      ) : kit === 'industrial' && (
         <div className="pointer-events-none absolute right-3 top-3 max-w-[18rem] rounded-md border border-line bg-panel px-3 py-2 text-[11px] leading-snug text-zinc-400" role="note">
           <div className="font-mono text-warn">CONCEPT · not in the proposed bill of materials</div>
           <div className="mt-0.5">Industrial-retrofit kit preview on the DC bench rig. The CT clamp is AC only and could not measure this DC lead.</div>
@@ -496,7 +510,7 @@ export function Viewport({ sim, snap, paused, onTogglePause, muted, onToggleMute
       </div>
 
       <div className="absolute bottom-3 right-3 hidden md:block">
-        <Minimap registry={registry} onFocus={onFocus} />
+        <Minimap registry={registry} onFocus={onFocus} asset={snap.asset} />
       </div>
     </div>
   );

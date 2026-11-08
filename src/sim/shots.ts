@@ -1,3 +1,6 @@
+import { RIGS } from './mounts';
+import type { AssetId } from './assets';
+
 export type V3 = [number, number, number];
 
 export interface CameraShot {
@@ -35,9 +38,20 @@ const SHOT_DEFS: Record<ShotName, { pos: V3; target: V3 }> = {
   clamp: { pos: [0.55, 0.95, 2.0], target: [-0.4, 0.1, 0.62] },
 };
 
+/** per-asset framing for the hardware shots that follow the machine's tap points (bench rig keeps SHOT_DEFS) */
+function assetShot(name: ShotName, asset: AssetId): { pos: V3; target: V3 } | null {
+  if (asset === 'bench-dc' || asset === 'induction-05hp') return null;
+  const m = RIGS[asset].mounts;
+  const off = (p: V3, d: V3): V3 => [p[0] + d[0], p[1] + d[1], p[2] + d[2]];
+  if (name === 'puck') return { target: off(m.puck.pos, [0, -0.05, 0.1]), pos: off(m.puck.pos, [1.35, 0.85, 1.8]) };
+  if (name === 'clamp') return { target: m.current.pos, pos: off(m.current.pos, [0.95, 0.8, 1.38]) };
+  if (name === 'temp') return { target: m.temp.pos, pos: off(m.temp.pos, [0.9, 0.7, 1.6]) };
+  return null;
+}
+
 let counter = 0;
-export function makeShot(name: ShotName): CameraShot {
-  const d = SHOT_DEFS[name];
+export function makeShot(name: ShotName, asset: AssetId = 'bench-dc'): CameraShot {
+  const d = assetShot(name, asset) ?? SHOT_DEFS[name];
   counter += 1;
   return { id: counter, name, pos: d.pos, target: d.target };
 }
