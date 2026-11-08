@@ -1,3 +1,8 @@
+/**
+ * @deprecated Phase 1: floating 3D labels are no longer rendered (DECISIONS.md D9, CLAUDE.md §9 "no floating HTML speech bubbles").
+ * The LabelRegistry type is still used: Scene.tsx's LabelProjector fills it and the Minimap reads the camera from it.
+ * Kept for reference until Phase 2 replaces labels with clickable hardware hotspots; delete then.
+ */
 import { useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 
@@ -19,7 +24,7 @@ export interface LabelItem {
 }
 
 const TONE_BORDER: Record<LabelItem['tone'], string> = {
-  cyan: 'border-cyan-500/60', amber: 'border-amber-500/70', red: 'border-red-500/70', green: 'border-emerald-500/60', zinc: 'border-zinc-600',
+  cyan: 'border-sky-400/60', amber: 'border-amber-500/70', red: 'border-red-500/70', green: 'border-emerald-500/60', zinc: 'border-zinc-600',
 };
 const TONE_DOT: Record<LabelItem['tone'], string> = {
   cyan: '#22d3ee', amber: '#f59e0b', red: '#ef4444', green: '#34d399', zinc: '#a1a1aa',
@@ -106,15 +111,15 @@ export function LabelLayer({ registry, items }: { registry: { current: LabelRegi
     <div key={it.id}>
       <div
         ref={(el) => { dotRefs.current[it.id] = el; }}
-        className="absolute left-0 top-0 h-2 w-2 rounded-full opacity-0"
-        style={{ background: TONE_DOT[it.tone], boxShadow: `0 0 8px ${TONE_DOT[it.tone]}` }}
+        className="absolute left-0 top-0 h-2 w-2 rounded-sm opacity-0"
+        style={{ background: TONE_DOT[it.tone] }}
       />
       <div
         ref={(el) => { chipRefs.current[it.id] = el; }}
-        className={`group absolute left-0 top-0 select-none whitespace-nowrap rounded-md border ${TONE_BORDER[it.tone]} bg-zinc-950/85 px-2 py-1 text-[11px] leading-tight text-zinc-200 opacity-0 shadow-lg backdrop-blur`}
+        className={`group absolute left-0 top-0 select-none whitespace-nowrap rounded-md border ${TONE_BORDER[it.tone]} bg-panel px-2 py-1 text-[11px] leading-tight text-zinc-200 opacity-0`}
       >
         <div className="font-semibold text-zinc-100">{it.title}</div>
-        <div className="mono text-cyan-300">{it.value}</div>
+        <div className="font-mono text-zinc-200">{it.value}</div>
         {it.sub && <div className="hidden max-w-[210px] whitespace-normal text-[10px] text-zinc-400 group-hover:block">{it.sub}</div>}
       </div>
     </div>

@@ -4,14 +4,14 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Edges, OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import { Bell, BellOff, Camera, Pause, Play, Tag, Volume2, VolumeX } from 'lucide-react';
+import { Bell, BellOff, Pause, Play, Volume2, VolumeX } from 'lucide-react';
 import type { Simulator, Snapshot } from '../sim/engine';
 import type { WalkState } from '../sim/walkthrough';
 import { CONFIG as C } from '../sim/config';
 import { HOME_POS, HOME_TARGET } from '../sim/shots';
 import type { CameraShot, ShotName, V3 } from '../sim/shots';
-import { LabelLayer } from './LabelLayer';
-import type { LabelItem, LabelRegistry } from './LabelLayer';
+import type { LabelRegistry } from './LabelLayer';
+import { SeverityBar } from './SeverityBar';
 import { Minimap } from './Minimap';
 import { TripFx } from './Fx';
 import { CanvasBoundary } from './CanvasBoundary';
@@ -514,68 +514,60 @@ interface ViewportProps {
   onFocus: (name: ShotName) => void;
   walk: WalkState;
   onStopWalk: () => void;
+  slowMo: number;
 }
 
-export function Viewport({ sim, snap, paused, onTogglePause, muted, onToggleMute, alarms, onToggleAlarms, onUserGesture, shot, onFocus, walk, onStopWalk }: ViewportProps) {
-  const [slowMo, setSlowMo] = useState(0.08);
-  const [showLabels, setShowLabels] = useState(true);
-  const [enabled, setEnabled] = useState<Record<string, boolean>>({});
-  const registry = useRef<LabelRegistry>({ points: {}, cam: { x: 0, z: 0, tx: 0, tz: 0 }, size: { w: 1, h: 1 } });
-  const btn = 'flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-900/80 px-2.5 py-1.5 text-xs text-zinc-200 backdrop-blur hover:bg-zinc-800';
+function IconButton({ label, onClick, children }: { label: string; onClick: () => void; children: ReactNode }) {
+  return (
+    <button
+      className="pointer-events-auto flex h-7 w-7 items-center justify-center rounded-md border border-line bg-panel text-zinc-400 transition-colors hover:text-zinc-100"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+    >
+      {children}
+    </button>
+  );
+}
 
-  const stTone = snap.state === 'NORMAL' ? 'green' : snap.state === 'EARLY' ? 'amber' : 'red';
-  const vTone = snap.vibBand === 'CRITICAL' ? 'red' : snap.vibBand === 'ADVISORY' ? 'amber' : 'cyan';
-  const tTone = snap.temp >= C.temp.crit ? 'red' : snap.temp >= C.temp.warn ? 'amber' : 'cyan';
-  const on = (k: string) => showLabels && enabled[k] !== false;
-  const items: LabelItem[] = [
-    { id: 'edge', title: 'ESP32 + safety cut-off', value: snap.stateLabel.split(' /')[0], sub: 'ESP32 acquires and sends data. The cut-off and LEDs are a concept add-on, not in the current parts list.', tone: stTone, priority: 6, enabled: on('edge') },
-    { id: 'mpu', title: 'MPU6050 · vibration', value: `${snap.vib.toFixed(2)} mm/s`, sub: '3-axis accelerometer on the bearing housing. Main evidence channel.', tone: vTone, priority: 5, enabled: on('mpu') },
-    { id: 'temp', title: 'DS18B20 · housing temp', value: `${snap.temp.toFixed(1)} °C`, sub: 'Waterproof probe clamped to the motor housing. Slow, trend-only channel.', tone: tTone, priority: 4, enabled: on('temp') },
-    { id: 'flywheel', title: 'Flywheel · eccentric mass', value: `${snap.massG.toFixed(2)} g`, sub: 'Bolt and nuts at a set radius create a controlled imbalance.', tone: 'cyan', priority: 3, enabled: on('flywheel') },
-    { id: 'motor', title: 'Motor · 12 V DC', value: `${Math.round(snap.rpm)} rpm`, sub: 'Brushed DC motor with a PWM speed controller (proposed). Cooling fins are a stylised visual.', tone: 'cyan', priority: 2, enabled: on('motor') },
-    { id: 'current', title: 'Current module (optional)', value: `${snap.current.toFixed(2)} A`, sub: 'ACS712-type module. Kept only if a pilot shows a usable signal.', tone: 'zinc', priority: 1, enabled: on('current') },
-  ];
+export function Viewport({ sim, snap, paused, onTogglePause, muted, onToggleMute, alarms, onToggleAlarms, onUserGesture, shot, onFocus, walk, onStopWalk, slowMo }: ViewportProps) {
+  // the registry is still filled by LabelProjector: the minimap reads the camera from it, and Phase 2 hotspots will use the points
+  const registry = useRef<LabelRegistry>({ points: {}, cam: { x: 0, z: 0, tx: 0, tz: 0 }, size: { w: 1, h: 1 } });
 
   return (
-    <div className="relative h-full w-full" onPointerDown={onUserGesture}>
+    <div className="relative h-full w-full bg-canvas" onPointerDown={onUserGesture}>
       <CanvasBoundary>
         <Canvas shadows dpr={[1, 1.75]} camera={{ position: HOME_POS, fov: 38, near: 0.1, far: 100 }} gl={{ antialias: true }}>
           <World sim={sim} slowMo={slowMo} registry={registry} shot={shot} walkActive={walk.active} />
         </Canvas>
       </CanvasBoundary>
 
-      <LabelLayer registry={registry} items={items} />
-
-      <div className="pointer-events-none absolute left-3 top-3 flex flex-wrap gap-2">
-        <button className={`${btn} pointer-events-auto`} onClick={() => onFocus('home')}><Camera size={13} />Reset camera</button>
-        <button className={`${btn} pointer-events-auto`} onClick={() => setShowLabels((v) => !v)}><Tag size={13} />{showLabels ? 'Hide labels' : 'Show labels'}</button>
-        <button className={`${btn} pointer-events-auto`} onClick={onTogglePause}>{paused ? <Play size={13} /> : <Pause size={13} />}{paused ? 'Resume' : 'Pause'}</button>
-        <button className={`${btn} pointer-events-auto`} onClick={onToggleMute}>{muted ? <VolumeX size={13} /> : <Volume2 size={13} />}{muted ? 'Sound off' : 'Sound on'}</button>
-        <button className={`${btn} pointer-events-auto`} onClick={onToggleAlarms}>{alarms ? <Bell size={13} /> : <BellOff size={13} />}{alarms ? 'Alarms on' : 'Alarms off'}</button>
+      <div className="pointer-events-none absolute left-3 top-3 flex gap-1.5">
+        <IconButton label={paused ? 'Resume simulation' : 'Pause simulation'} onClick={onTogglePause}>{paused ? <Play size={13} /> : <Pause size={13} />}</IconButton>
+        <IconButton label={muted ? 'Sound off (click to enable)' : 'Sound on (click to mute)'} onClick={onToggleMute}>{muted ? <VolumeX size={13} /> : <Volume2 size={13} />}</IconButton>
+        <IconButton label={alarms ? 'Alarm beeps on' : 'Alarm beeps off'} onClick={onToggleAlarms}>{alarms ? <Bell size={13} /> : <BellOff size={13} />}</IconButton>
+        {paused && <span className="font-mono flex h-7 items-center rounded-md border border-line bg-panel px-2 text-[11px] text-zinc-400">PAUSED</span>}
       </div>
 
       {walk.active && (
-        <div className="pointer-events-auto absolute bottom-24 left-3 w-[min(30rem,calc(100%-1.5rem))] rounded-lg border border-cyan-500/50 bg-zinc-950/90 p-3 shadow-xl backdrop-blur" role="status" aria-live="polite">
+        <div className="pointer-events-auto absolute left-3 top-12 w-[min(28rem,calc(100%-1.5rem))] rounded-md border border-line bg-panel p-3" role="status" aria-live="polite">
           <div className="mb-1 flex items-center justify-between">
-            <span className="text-[10px] font-semibold uppercase tracking-widest text-cyan-300">Evaluator walkthrough · scene {walk.scene} of {walk.total}</span>
-            <button className="rounded border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-300 hover:bg-zinc-800" onClick={onStopWalk}>Stop</button>
+            <span className="font-mono text-[11px] uppercase tracking-wider text-zinc-500">Walkthrough · scene {walk.scene}/{walk.total}</span>
+            <button className="rounded-md border border-line px-2 py-0.5 text-[11px] text-zinc-300 hover:bg-zinc-900" onClick={onStopWalk}>Stop</button>
           </div>
-          <div className="text-sm font-bold text-zinc-100">{walk.title}</div>
-          <p className="mt-1 text-xs leading-snug text-zinc-300">{walk.caption}</p>
-          <div className="mt-2 h-1 w-full overflow-hidden rounded bg-zinc-800"><div className="h-full bg-cyan-400" style={{ width: `${Math.round(walk.progress * 100)}%` }} /></div>
+          <div className="text-sm font-medium text-zinc-100">{walk.title}</div>
+          <p className="mt-1 text-xs leading-snug text-zinc-400">{walk.caption}</p>
+          <div className="mt-2 h-px w-full bg-zinc-800"><div className="h-px bg-zinc-300" style={{ width: `${Math.round(walk.progress * 100)}%` }} /></div>
         </div>
       )}
 
-      <div className="pointer-events-auto absolute bottom-3 left-3 w-64 rounded-md border border-zinc-800 bg-zinc-950/80 p-2.5 text-[11px] text-zinc-400 backdrop-blur">
-        <div className="mb-1 flex justify-between"><span>Visual slow-motion</span><span className="mono text-cyan-300">{slowMo.toFixed(2)}×</span></div>
-        <input type="range" className="w-full" min={0.01} max={1} step={0.01} value={slowMo} onChange={(e) => setSlowMo(Number(e.target.value))} aria-label="Visual slow-motion" />
-        <div className="mt-1 text-[10px] text-zinc-600">Slows only how rotation is drawn. Real-time speed strobes on a 60 Hz screen.</div>
+      <div className="pointer-events-auto absolute bottom-3 left-3">
+        <SeverityBar snap={snap} />
       </div>
 
-      <div className="absolute bottom-3 right-3">
-        <Minimap registry={registry} enabled={enabled} onFocus={onFocus} onToggle={(k) => setEnabled((p) => ({ ...p, [k]: p[k] === false }))} />
+      <div className="absolute bottom-3 right-3 hidden md:block">
+        <Minimap registry={registry} onFocus={onFocus} />
       </div>
     </div>
   );
 }
-
