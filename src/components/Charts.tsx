@@ -45,80 +45,85 @@ function useAnimatedCanvas(draw: Draw, fps = 24) {
   return ref;
 }
 
-// ------------------------------------------------------------------ FFT waterfall
+// ------------------------------------------------------------------ palette (canvas cannot read CSS variables cheaply)
+const PLOT_BG = '#09090b';
+const GRID = '#18181b';
+const AXIS = '#3f3f46';
+const TICK = '#71717a';
+const TRACE = '#38bdf8';
+const MARKER = '#a1a1aa';
+const WARN = 'rgba(245,158,11,0.55)';
+const CRIT = 'rgba(239,68,68,0.6)';
+const MONO = '10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+
+// ------------------------------------------------------------------ FFT: single flat trace
+/** Flat 1 px spectrum trace, 0-200 Hz, ticks every 25 Hz, dashed 1X marker. The engine's waterfall data is kept but not drawn (D8). */
 export function drawSpectrum(sim: Simulator, ctx: CanvasRenderingContext2D, w: number, h: number): void {
-    const { waterfall, f1 } = sim.getSpectrum();
-    const padL = 34, padR = 10, padT = 8, padB = 22;
-    const pw = w - padL - padR;
-    const ph = h - padT - padB;
-    const n = C.fftBins;
-    const yMax = 8.5;
-    const rows = waterfall.length;
-    const depthX = 26; // total perspective shift
-    const depthY = ph * 0.34;
+  const { latest, f1 } = sim.getSpectrum();
+  const padL = 34, padR = 10, padT = 18, padB = 20;
+  const pw = Math.max(1, w - padL - padR);
+  const ph = Math.max(1, h - padT - padB);
+  const n = latest.length;
+  const yMax = 8.5;
+  const xOf = (f: number) => padL + (f / C.fftMaxHz) * pw;
+  const yOf = (v: number) => padT + ph - (Math.min(Math.max(v, 0), yMax) / yMax) * ph;
 
-    ctx.fillStyle = '#0a0a0c';
-    ctx.fillRect(padL, padT, pw, ph);
+  ctx.fillStyle = PLOT_BG;
+  ctx.fillRect(padL, padT, pw, ph);
+  ctx.lineWidth = 1;
+  ctx.font = MONO;
 
-    // x axis grid + labels
-    ctx.font = '10px ui-monospace, monospace';
-    ctx.textAlign = 'center';
-    ctx.fillStyle = '#71717a';
-    ctx.strokeStyle = '#1f1f23';
-    ctx.lineWidth = 1;
-    for (let f = 0; f <= C.fftMaxHz; f += 25) {
-      const x = padL + (f / C.fftMaxHz) * (pw - depthX);
-      ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + ph); ctx.stroke();
-      ctx.fillText(String(f), x, h - 8);
-    }
+  // horizontal grid (mm/s)
+  ctx.strokeStyle = GRID;
+  ctx.fillStyle = TICK;
+  ctx.textAlign = 'right';
+  for (let v = 2; v <= 8; v += 2) {
+    const y = Math.round(yOf(v)) + 0.5;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + pw, y); ctx.stroke();
+    ctx.fillText(String(v), padL - 5, y + 3);
+  }
+  // vertical grid + Hz ticks every 25 Hz
+  ctx.textAlign = 'center';
+  for (let f = 0; f <= C.fftMaxHz; f += 25) {
+    const x = Math.round(xOf(f)) + 0.5;
+    ctx.strokeStyle = f === 0 ? AXIS : GRID;
+    ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + ph); ctx.stroke();
+    ctx.fillText(String(f), x, h - 6);
+  }
+  ctx.strokeStyle = AXIS;
+  ctx.beginPath(); ctx.moveTo(padL, padT + ph + 0.5); ctx.lineTo(padL + pw, padT + ph + 0.5); ctx.stroke();
+  ctx.textAlign = 'left';
+  ctx.fillText('mm/s', 2, padT - 6);
+  ctx.textAlign = 'right';
+  ctx.fillText('Hz', w - 2, padT - 6);
+
+  // the trace
+  ctx.beginPath();
+  for (let i = 0; i < n; i++) {
+    const x = padL + (i / Math.max(1, n - 1)) * pw;
+    const y = yOf(latest[i]);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.strokeStyle = TRACE;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // 1X marker (rotational frequency = rpm / 60)
+  if (f1 > 1) {
+    const x = Math.round(xOf(f1)) + 0.5;
+    ctx.strokeStyle = MARKER;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + ph); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#d4d4d8';
     ctx.textAlign = 'left';
-    ctx.fillText('Hz', w - 18, h - 8);
-    ctx.textAlign = 'right';
-    ctx.fillText('mm/s', padL - 4, padT + 10);
-
-    const baseY = padT + ph - 2;
-    for (let k = 0; k < rows; k++) {
-      const age = rows - 1 - k; // 0 = newest
-      const depth = age / Math.max(1, C.waterfallLen - 1);
-      const ox = padL + depth * depthX;
-      const oy = baseY - (1 - depth) * 0; // newest at the front (bottom)
-      const yShift = -depth * depthY;
-      const sp = waterfall[k];
-      const scale = (ph * 0.55) / yMax;
-      ctx.beginPath();
-      for (let i = 0; i < n; i++) {
-        const x = ox + (i / (n - 1)) * (pw - depthX);
-        const y = oy + yShift - Math.min(sp[i], yMax) * scale;
-        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-      }
-      // occlusion fill (painter's algorithm)
-      ctx.lineTo(ox + (pw - depthX), oy + yShift);
-      ctx.lineTo(ox, oy + yShift);
-      ctx.closePath();
-      ctx.fillStyle = 'rgba(10,10,12,0.92)';
-      ctx.fill();
-      const newest = age === 0;
-      ctx.strokeStyle = newest ? '#22d3ee' : `rgba(56,189,248,${0.12 + 0.4 * (1 - depth)})`;
-      ctx.lineWidth = newest ? 1.8 : 1;
-      ctx.stroke();
-    }
-
-    // 1X marker on the newest trace
-    if (f1 > 1) {
-      const x = padL + (f1 / C.fftMaxHz) * (pw - depthX);
-      ctx.strokeStyle = 'rgba(251,191,36,0.9)';
-      ctx.setLineDash([3, 3]);
-      ctx.beginPath(); ctx.moveTo(x, padT + 4); ctx.lineTo(x, padT + ph); ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle = '#fbbf24';
-      ctx.textAlign = 'left';
-      ctx.fillText(`1X = ${f1.toFixed(2)} Hz`, Math.min(x + 4, w - 90), padT + 12);
-    }
+    ctx.fillText(`1X ${f1.toFixed(2)} Hz`, Math.min(x + 4, w - 84), padT - 6);
+  }
 }
 
 export function SpectrumChart({ sim }: { sim: Simulator }) {
   const ref = useAnimatedCanvas((ctx, w, h) => drawSpectrum(sim, ctx, w, h), 20);
-  return <canvas ref={ref} className="block h-52 w-full rounded-md" aria-label="Vibration spectrum waterfall (synthetic)" />;
+  return <canvas ref={ref} className="block h-48 w-full" aria-label="Vibration spectrum, 0 to 200 Hz (synthetic)" />;
 }
 
 // ------------------------------------------------------------------ strip charts
@@ -129,71 +134,78 @@ interface StripProps {
   pick: (h: { vib: number[]; cur: number[]; temp: number[] }) => number[];
   min: number;
   max: number;
-  color: string;
+  color?: string;
   warn?: number;
   crit?: number;
   decimals?: number;
 }
 
+/** 10 s rolling trace: 1 px line, no fill, dashed muted threshold lines, mono current-value readout */
 export function drawStrip(sim: Simulator, props: StripProps, ctx: CanvasRenderingContext2D, w: number, h: number): void {
-  const { title, unit, pick, min, max, color, warn, crit, decimals = 2 } = props;
-    const data = pick(sim.history());
-    const padL = 30, padR = 6, padT = 14, padB = 4;
-    const pw = w - padL - padR;
-    const ph = h - padT - padB;
-    const yOf = (v: number) => padT + ph - ((Math.min(max, Math.max(min, v)) - min) / (max - min)) * ph;
+  const { title, unit, pick, min, max, color = TRACE, warn, crit, decimals = 2 } = props;
+  const data = pick(sim.history());
+  const padL = 30, padR = 6, padT = 16, padB = 3;
+  const pw = Math.max(1, w - padL - padR);
+  const ph = Math.max(1, h - padT - padB);
+  const yOf = (v: number) => padT + ph - ((Math.min(max, Math.max(min, v)) - min) / (max - min)) * ph;
 
-    ctx.fillStyle = '#0a0a0c';
-    ctx.fillRect(padL, padT, pw, ph);
-    ctx.font = '10px ui-monospace, monospace';
-    ctx.textAlign = 'right';
-    ctx.fillStyle = '#71717a';
-    ctx.fillText(String(max), padL - 3, padT + 8);
-    ctx.fillText(String(min), padL - 3, padT + ph);
+  ctx.fillStyle = PLOT_BG;
+  ctx.fillRect(padL, padT, pw, ph);
+  ctx.font = MONO;
+  ctx.lineWidth = 1;
 
-    const dash = (v: number | undefined, col: string) => {
-      if (v === undefined) return;
-      const y = yOf(v);
-      ctx.strokeStyle = col;
-      ctx.setLineDash([4, 3]);
-      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + pw, y); ctx.stroke();
-      ctx.setLineDash([]);
-    };
-    ctx.lineWidth = 1;
-    dash(warn, 'rgba(245,158,11,0.7)');
-    dash(crit, 'rgba(239,68,68,0.8)');
+  // mid grid line
+  ctx.strokeStyle = GRID;
+  const yMid = Math.round(padT + ph / 2) + 0.5;
+  ctx.beginPath(); ctx.moveTo(padL, yMid); ctx.lineTo(padL + pw, yMid); ctx.stroke();
 
-    ctx.beginPath();
-    for (let i = 0; i < data.length; i++) {
-      const x = padL + (i / (C.histLen - 1)) * pw;
-      const y = yOf(data[i]);
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    }
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1.6;
-    ctx.stroke();
+  ctx.textAlign = 'right';
+  ctx.fillStyle = TICK;
+  ctx.fillText(String(max), padL - 4, padT + 8);
+  ctx.fillText(String(min), padL - 4, padT + ph);
 
-    ctx.textAlign = 'left';
-    ctx.fillStyle = '#a1a1aa';
-    ctx.fillText(title, padL, 10);
-    const last = data.length ? data[data.length - 1] : 0;
-    ctx.textAlign = 'right';
-    ctx.fillStyle = color;
-    ctx.fillText(`${last.toFixed(decimals)} ${unit}`, padL + pw, 10);
+  const dash = (v: number | undefined, col: string) => {
+    if (v === undefined) return;
+    const y = Math.round(yOf(v)) + 0.5;
+    ctx.strokeStyle = col;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + pw, y); ctx.stroke();
+    ctx.setLineDash([]);
+  };
+  dash(warn, WARN);
+  dash(crit, CRIT);
+
+  ctx.beginPath();
+  for (let i = 0; i < data.length; i++) {
+    const x = padL + (i / (C.histLen - 1)) * pw;
+    const y = yOf(data[i]);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  const last = data.length ? data[data.length - 1] : 0;
+  ctx.textAlign = 'left';
+  ctx.fillStyle = TICK;
+  ctx.fillText(title.toUpperCase(), padL, 10);
+  ctx.textAlign = 'right';
+  ctx.fillStyle = crit !== undefined && last >= crit ? '#ef4444' : warn !== undefined && last >= warn ? '#f59e0b' : '#e4e4e7';
+  ctx.fillText(`${last.toFixed(decimals)} ${unit}`, padL + pw, 10);
 }
 
 export function StripChart(props: StripProps) {
   const { sim, title } = props;
   const ref = useAnimatedCanvas((ctx, w, h) => drawStrip(sim, props, ctx, w, h), 20);
-  return <canvas ref={ref} className="block h-[88px] w-full rounded-md" aria-label={`${title} trend, last 10 seconds (synthetic)`} />;
+  return <canvas ref={ref} className="block h-[76px] w-full" aria-label={`${title} trend, last 10 seconds (synthetic)`} />;
 }
 
 export function StripCharts({ sim }: { sim: Simulator }) {
   return (
-    <div className="space-y-2">
-      <StripChart sim={sim} title="Vibration RMS" unit="mm/s" pick={(h) => h.vib} min={0} max={10} color="#22d3ee" warn={C.vib.warn} crit={C.vib.crit} />
-      <StripChart sim={sim} title="Current" unit="A" pick={(h) => h.cur} min={0} max={5.5} color="#a78bfa" crit={C.current.crit} />
-      <StripChart sim={sim} title="Stator temperature" unit="°C" pick={(h) => h.temp} min={20} max={100} color="#fb923c" warn={C.temp.warn} crit={C.temp.crit} decimals={1} />
+    <div className="space-y-3">
+      <StripChart sim={sim} title="Vibration RMS" unit="mm/s" pick={(h) => h.vib} min={0} max={10} warn={C.vib.warn} crit={C.vib.crit} />
+      <StripChart sim={sim} title="Motor current" unit="A" pick={(h) => h.cur} min={0} max={5.5} crit={C.current.crit} />
+      <StripChart sim={sim} title="Stator temperature" unit="°C" pick={(h) => h.temp} min={20} max={100} warn={C.temp.warn} crit={C.temp.crit} decimals={1} />
     </div>
   );
 }

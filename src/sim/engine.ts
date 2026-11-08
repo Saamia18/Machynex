@@ -244,8 +244,8 @@ export class Simulator {
         this.ramp('currentA', C.currentNominal, 1.0);
         this.ramp('tempC', C.tempNominal, 1.0);
         this.ramp('rpm', C.nominalRpm, 1.0);
-        this.log('INFO', 'Preset: Normal Baseline (0.15 g, 1.2 A, 38 C, 1450 rpm).');
-        if (!this.relayClosed) this.log('INFO', 'Safety cut-off is still open. Press Reset Relay after the fault is cleared.');
+        this.log('INFO', 'Preset: Nominal (0.15 g, 1.2 A, 38 C, 1450 rpm).');
+        if (!this.relayClosed) this.log('INFO', 'Safety cut-off is still open. Press Reset Interlock after the fault is cleared.');
         break;
       case 'progressive':
         this.sp.massG = C.massDefault;
@@ -254,17 +254,17 @@ export class Simulator {
         this.ramp('tempC', C.tempNominal, 0.5);
         this.ramp('rpm', C.nominalRpm, 0.5);
         this.ramp('massG', 0.65, 8.0, false);
-        this.log('INFO', 'Preset: Progressive Unbalance (0.15 g to 0.65 g over 8 s).');
+        this.log('INFO', 'Preset: Imbalance, progressive (0.15 g to 0.65 g over 8 s).');
         break;
       case 'shock':
         this.shockRemaining = C.shock.durS;
-        this.log('INFO', 'Preset: Transient floor shock injected (300 ms).');
+        this.log('INFO', 'Preset: Transient knock injected (300 ms).');
         break;
       case 'critical':
         this.ramp('massG', 1.1, 1.2);
         this.ramp('currentA', 4.4, 1.2);
         this.ramp('tempC', 82, 2.0);
-        this.log('INFO', 'Preset: Critical Trip Event (vibration, current and temperature spiking).');
+        this.log('INFO', 'Preset: Critical Fault (vibration, current and temperature spiking).');
         break;
     }
   }
@@ -288,7 +288,7 @@ export class Simulator {
       return { ok: false, reason: 'already closed' };
     }
     if (this.faultPresent()) {
-      const reason = 'critical condition still present; clear the fault (e.g. Normal Baseline) first';
+      const reason = 'critical condition still present; clear the fault (e.g. Nominal preset) first';
       this.log('RESET', `Reset refused: ${reason}.`);
       return { ok: false, reason };
     }
@@ -525,7 +525,7 @@ export class Simulator {
       }
     }
 
-    if (this.state === 'CRITICAL') return; // latched until Reset Relay
+    if (this.state === 'CRITICAL') return; // latched until Reset Interlock
 
     const cur = RANK[this.state];
     if (overall > cur) {
