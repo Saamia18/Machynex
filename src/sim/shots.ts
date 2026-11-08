@@ -9,7 +9,9 @@ export interface CameraShot {
 
 export type ShotName =
   | 'home' | 'sensors' | 'bearing' | 'wide' | 'trip'
-  | 'motor' | 'mpu' | 'temp' | 'current' | 'flywheel' | 'edge';
+  | 'motor' | 'mpu' | 'temp' | 'current' | 'flywheel' | 'edge'
+  // Phase 2 hardware macro shots
+  | 'rig' | 'nodeMacro' | 'puck' | 'clamp';
 
 export const HOME_POS: V3 = [7.6, 4.4, 8.4];
 export const HOME_TARGET: V3 = [-0.2, 0.75, 0.6];
@@ -26,6 +28,11 @@ const SHOT_DEFS: Record<ShotName, { pos: V3; target: V3 }> = {
   current: { pos: [0.6, 1.4, 3.2], target: [-0.6, 0.2, 0.7] },
   flywheel: { pos: [4.2, 2.0, 3.2], target: [1.4, 0.85, 0.0] },
   edge: { pos: [2.6, 1.6, 5.6], target: [0.2, 0.1, 2.35] },
+  rig: { pos: HOME_POS, target: HOME_TARGET },
+  // high above the node's rear-right corner, looking down through the lid: PCB, end fins and the rear glands with their cables
+  nodeMacro: { pos: [1.75, 2.35, 1.35], target: [0.2, -0.15, 2.3] },
+  puck: { pos: [1.85, 1.95, 1.9], target: [0.5, 1.05, 0.1] },
+  clamp: { pos: [0.55, 0.95, 2.0], target: [-0.4, 0.1, 0.62] },
 };
 
 let counter = 0;
@@ -34,3 +41,6 @@ export function makeShot(name: ShotName): CameraShot {
   counter += 1;
   return { id: counter, name, pos: d.pos, target: d.target };
 }
+
+export const SHOT_NAMES = Object.keys(SHOT_DEFS) as ShotName[];
+export const shotDef = (name: ShotName) => SHOT_DEFS[name];

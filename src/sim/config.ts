@@ -42,5 +42,8 @@ export const CONFIG = {
   fftMaxHz: 200,
   waterfallLen: 36,
   captureMax: 7200, // 1 hour of 2 Hz packets
+
+  // 'bench' = the proposal's parts (default); 'industrial' = concept retrofit kit preview (not in the BOM)
+  sensorKitDefault: 'bench' as 'bench' | 'industrial',
   eventMax: 2000,
 } as const;
