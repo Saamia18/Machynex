@@ -1,6 +1,7 @@
 import type { LabelRegistry } from './LabelLayer';
 import type { ShotName } from '../sim/shots';
 import { NODE, RIGS } from '../sim/mounts';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 import type { AssetId } from '../sim/assets';
 
 // top-down schematic: x in [-3.6, 3.6], z in [-1.5, 3.0]
@@ -20,7 +21,7 @@ const DOTS: { id: ShotName; x: number; z: number; label: string }[] = [
 ];
 
 /** flat top-down schematic; click a point to move the camera there */
-export function Minimap({ registry, onFocus, asset = 'bench-dc' }: { registry: { current: LabelRegistry }; onFocus: (n: ShotName) => void; asset?: AssetId }) {
+export function Minimap({ registry, onFocus, asset = 'bench-dc', expanded = true, onToggle }: { registry: { current: LabelRegistry }; onFocus: (n: ShotName) => void; asset?: AssetId; expanded?: boolean; onToggle?: () => void }) {
   const cam = registry.current.cam;
   const az = Math.atan2(cam.x - cam.tx, cam.z - cam.tz);
   const cx = sx(-0.2), cz = sz(0.6);
@@ -36,9 +37,17 @@ export function Minimap({ registry, onFocus, asset = 'bench-dc' }: { registry: {
     { id: 'nodeMacro', x: NODE.center[0], z: NODE.center[2], label: 'Edge node' },
   ];
   return (
-    <div className="pointer-events-auto rounded-md border border-line bg-panel p-1.5">
-      <div className="mb-1 px-0.5 text-[11px] uppercase tracking-wider text-zinc-500">Plan view · click to focus</div>
-      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block rounded-sm bg-well">
+    <div className="pointer-events-auto rounded-md border border-line bg-panel p-1">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        className="flex h-5 w-full items-center justify-between gap-2 px-1 text-[11px] uppercase tracking-wider text-zinc-500 outline-none hover:text-zinc-300 focus-visible:outline focus-visible:outline-1 focus-visible:outline-zinc-400"
+      >
+        <span>Plan view</span>
+        {expanded ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
+      </button>
+      {expanded && <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="mt-1 block rounded-sm bg-well">
         <rect x={sx(-3.2)} y={sz(-1)} width={sx(3.0) - sx(-3.2)} height={sz(1) - sz(-1)} fill="none" stroke="#3f3f46" strokeDasharray="3 3" />
         {bench ? (
           <>
@@ -58,7 +67,7 @@ export function Minimap({ registry, onFocus, asset = 'bench-dc' }: { registry: {
             <title>{d.label}</title>
           </g>
         ))}
-      </svg>
+      </svg>}
     </div>
   );
 }

@@ -8,7 +8,7 @@
     "build": "vite build",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
-    "test": "tsx tests/engine.test.ts && tsx tests/charts.test.ts && tsx tests/walkthrough.test.ts && tsx tests/reset.test.ts && tsx tests/clock.test.ts && tsx tests/design-rules.test.ts && tsx tests/hardware-specs.test.ts && tsx tests/assets.test.ts && tsx tests/ml.test.ts && tsx tests/walkthrough-assets.test.ts"
+    "test": "tsx tests/engine.test.ts && tsx tests/charts.test.ts && tsx tests/walkthrough.test.ts && tsx tests/reset.test.ts && tsx tests/clock.test.ts && tsx tests/design-rules.test.ts && tsx tests/hardware-specs.test.ts && tsx tests/assets.test.ts && tsx tests/ml.test.ts && tsx tests/walkthrough-assets.test.ts && tsx tests/asset-switcher.test.tsx"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.3.0",

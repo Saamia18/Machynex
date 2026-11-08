@@ -2,6 +2,7 @@ import { Play, RotateCcw, ScanEye, Square } from 'lucide-react';
 import type { HealthState } from '../sim/engine';
 import type { ShotName } from '../sim/shots';
 import type { SensorKit } from '../sim/mounts';
+import { ViewMenu } from './ViewMenu';
 
 export const NODE_ID = 'MNX-EDGE-01';
 
@@ -32,7 +33,7 @@ interface HeaderBarProps {
   onXray: () => void;
 }
 
-const ghost = 'flex h-7 items-center gap-1.5 rounded-md border border-line px-2.5 text-xs text-zinc-300 transition-colors hover:border-zinc-700 hover:bg-zinc-900 hover:text-zinc-100';
+const ghost = 'flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-line px-2.5 text-xs text-zinc-300 transition-colors hover:border-zinc-700 hover:bg-zinc-900 hover:text-zinc-100';
 
 export function HeaderBar({ state, activeShot, onFocus, onReset, walkActive, onStartWalk, onStopWalk, kit, xray, onXray }: HeaderBarProps) {
   return (
@@ -54,20 +55,24 @@ export function HeaderBar({ state, activeShot, onFocus, onReset, walkActive, onS
       </div>
 
       <div className="ml-auto flex items-center gap-2">
-        <div className="hidden h-7 items-stretch overflow-hidden rounded-md border border-line sm:flex" role="group" aria-label="Camera presets">
+        {/* below 1500 px the presets + X-ray collapse into one View menu so no label is ever truncated */}
+        <div className="min-[1500px]:hidden">
+          <ViewMenu presets={cameraPresets(kit)} activeShot={activeShot} onFocus={onFocus} xray={xray} onXray={onXray} />
+        </div>
+        <div className="hidden h-7 shrink-0 items-stretch overflow-hidden rounded-md border border-line min-[1500px]:flex" role="group" aria-label="Camera presets">
           {cameraPresets(kit).map((p, i) => (
             <button
               key={p.id}
               onClick={() => onFocus(p.id)}
               aria-pressed={activeShot === p.id}
-              className={`px-2.5 text-xs transition-colors ${i > 0 ? 'border-l border-line' : ''} ${activeShot === p.id ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'}`}
+              className={`whitespace-nowrap px-2.5 text-xs transition-colors ${i > 0 ? 'border-l border-line' : ''} ${activeShot === p.id ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'}`}
             >
               {p.label}
             </button>
           ))}
         </div>
         <button
-          className={`${ghost} ${xray ? 'border-zinc-600 bg-zinc-800 text-zinc-100' : ''}`}
+          className={`${ghost} hidden min-[1500px]:flex ${xray ? 'border-zinc-600 bg-zinc-800 text-zinc-100' : ''}`}
           onClick={onXray}
           aria-pressed={xray}
           title="X-ray / open enclosure: host machine at 25% wireframe, node lid slides open"

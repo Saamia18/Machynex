@@ -1,6 +1,7 @@
 // Visual QA helper for the Machynex digital twin.
 //
-// Usage:  node scripts/qa-screenshots.mjs [url] [outDir]
+// Usage:  node scripts/qa-screenshots.mjs [url] [outDir] [assetLabel]
+//   assetLabel  optional machine to select first: "Bench rig" | "Induction" | "Pump" | "Gearbox"
 //   url     default http://localhost:5173   (start `npm run dev` or `npm run preview` first)
 //   outDir  default qa-screenshots/run
 //
@@ -14,6 +15,7 @@ import { chromium } from 'playwright';
 
 const url = process.argv[2] ?? 'http://localhost:5173';
 const outDir = process.argv[3] ?? 'qa-screenshots/run';
+const assetLabel = process.argv[4] ?? null;
 mkdirSync(outDir, { recursive: true });
 
 const VIEWPORTS = [
@@ -46,6 +48,13 @@ for (const vp of VIEWPORTS) {
 
   await page.goto(url, { waitUntil: 'networkidle' });
   await page.waitForTimeout(3500); // let the scene settle
+  if (assetLabel) {
+    // wide canvas: segmented radios; narrow canvas: open the 'Asset: <name>' dropdown first
+    const radio = page.getByRole('radio', { name: assetLabel, exact: true });
+    if (!(await radio.isVisible().catch(() => false))) await page.getByRole('button', { name: /^Asset:/ }).click();
+    await page.getByRole('radio', { name: assetLabel, exact: true }).click();
+    await page.waitForTimeout(6000); // camera eases to the new framing, model retrains
+  }
 
   const info = await page.evaluate(() => ({
     overflowX: document.documentElement.scrollWidth > window.innerWidth + 1,
@@ -72,7 +81,7 @@ for (const vp of VIEWPORTS) {
     trip: await clickIf(/critical trip|critical fault|severe fault/i, 'trip'),
   };
 
-  console.log(`\n=== ${vp.name}`);
+  console.log(`\n=== ${vp.name}${assetLabel ? ` · ${assetLabel}` : ''}`);
   console.log(`canvas elements: ${info.canvases} | banner present: ${info.bannerPresent} | horizontal overflow: ${info.overflowX} | vertical page overflow: ${info.overflowY}`);
   console.log(`interactions exercised: ${JSON.stringify(did)}`);
   console.log(`page errors: ${pageErrors.length ? '\n  - ' + pageErrors.join('\n  - ') : 'none'}`);

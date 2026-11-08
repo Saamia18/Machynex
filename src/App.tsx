@@ -15,7 +15,7 @@ import type { AssetId } from './sim/assets';
 import { useAnomaly } from './sim/useAnomaly';
 
 /** Honesty banner (CLAUDE.md §3.1). Always visible; tests/design-rules.test.ts asserts it is present. */
-export const BANNER_TEXT = 'PROPOSED CONCEPT · SYNTHETIC TELEMETRY · PROOF-OF-CONCEPT RIG · NO HARDWARE CONNECTED';
+export const BANNER_TEXT = 'PROPOSED CONCEPT · SYNTHETIC TELEMETRY · NO HARDWARE CONNECTED';
 
 export default function App() {
   const { sim, snap, logs, paused, setPaused, muted, setMuted, alarms, setAlarms, unlock, resetSimulation, setAsset, appendLogs } = useSimulator();
@@ -90,11 +90,12 @@ export default function App() {
             xray={xray}
             selected={inspect}
             onSelect={setInspect}
+            onAsset={switchAsset}
           />
         </div>
         <div className="relative min-h-0">
           <div className="scroll-thin h-full overflow-y-auto bg-canvas">
-            <DashboardPane sim={sim} snap={snap} logs={logs} onUserGesture={unlock} slowMo={slowMo} onSlowMo={setSlowMo} kit={effectiveKit} onInspect={setInspect} onAsset={switchAsset} ml={ml} walkScene={walk.active ? walk.scene : 0} />
+            <DashboardPane sim={sim} snap={snap} logs={logs} onUserGesture={unlock} slowMo={slowMo} onSlowMo={setSlowMo} kit={effectiveKit} onInspect={setInspect} ml={ml} walkScene={walk.active ? walk.scene : 0} />
           </div>
           <InspectorDrawer id={inspect} kit={effectiveKit} onKit={setKit} kitLocked={ASSETS[snap.asset].sensorKit !== 'bench'} snap={snap} onClose={closeInspector} />
         </div>

@@ -5,7 +5,7 @@ import type { HealthState, LogLine, PresetName, SetpointKey, Simulator, Snapshot
 import { CONFIG as C } from '../sim/config';
 import { SpectrumChart, StripCharts } from './Charts';
 import { RadialGauge } from './RadialGauge';
-import { ASSETS, ASSET_IDS, CONCEPT_ASSET_TAG, gmfHz } from '../sim/assets';
+import { gmfHz } from '../sim/assets';
 import type { AssetId, AssetProfile } from '../sim/assets';
 import { FEATURE_NAMES, FEATURE_UNITS, ML_PERSIST_S } from '../sim/dashboardML';
 import type { AnomalyView } from '../sim/useAnomaly';
@@ -203,10 +203,9 @@ interface ControlsProps {
   onUserGesture: () => void;
   slowMo: number;
   onSlowMo: (v: number) => void;
-  onAsset: (id: AssetId) => void;
 }
 
-export function Controls({ sim, snap, onUserGesture, slowMo, onSlowMo, onAsset }: ControlsProps) {
+export function Controls({ sim, snap, onUserGesture, slowMo, onSlowMo }: ControlsProps) {
   const P = sim.profile;
   const set = (k: SetpointKey, v: number) => sim.setTarget(k, v);
   const preset = (p: PresetName) => { onUserGesture(); sim.preset(p); };
@@ -216,26 +215,12 @@ export function Controls({ sim, snap, onUserGesture, slowMo, onSlowMo, onAsset }
   const th = P.th;
   return (
     <div className="space-y-4">
-      <div>
-        <Label className="mb-1.5">Machine</Label>
-        <div className="grid grid-cols-2 overflow-hidden rounded-md border border-line sm:grid-cols-4" role="group" aria-label="Machine">
-          {ASSET_IDS.map((id, i) => (
-            <button
-              key={id}
-              onClick={() => { onUserGesture(); onAsset(id); }}
-              aria-pressed={snap.asset === id}
-              title={ASSETS[id].name}
-              className={`h-8 px-2 text-xs transition-colors ${i > 0 ? 'border-l border-line' : ''} ${i === 2 ? 'max-sm:border-l-0 max-sm:border-t' : ''} ${i === 3 ? 'max-sm:border-t' : ''} ${snap.asset === id ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'}`}
-            >
-              {ASSET_LABEL[id]}
-            </button>
-          ))}
-        </div>
-        <div className="mt-1.5 text-[11px] leading-snug text-zinc-500">
-          {P.scope === 'proposal'
-            ? <>Proposal scope · fault model: {P.faultName}</>
-            : <><span className="font-mono text-warn">{CONCEPT_ASSET_TAG}</span> · {P.faultName}. {P.conceptNote}</>}
-        </div>
+      {/* the machine is switched from the control at the top of the 3D view; this line is read-only */}
+      <div className="flex items-baseline gap-2 text-xs" aria-label="Active machine">
+        <span className="text-zinc-500">Asset:</span>
+        <span className="text-zinc-200">{ASSET_LABEL[P.id]}</span>
+        {P.scope === 'concept' && <span className="font-mono rounded-sm border border-line px-1 text-[10px] uppercase tracking-wider text-zinc-400">Concept</span>}
+        <span className="truncate text-[11px] text-zinc-500">· {P.faultName}</span>
       </div>
 
       <div>
@@ -419,12 +404,11 @@ interface PaneProps {
   onSlowMo: (v: number) => void;
   kit: SensorKit;
   onInspect: (id: HardwareId) => void;
-  onAsset: (id: AssetId) => void;
   ml: AnomalyView;
   walkScene: number;
 }
 
-export function DashboardPane({ sim, snap, logs, onUserGesture, slowMo, onSlowMo, kit, onInspect, onAsset, ml, walkScene }: PaneProps) {
+export function DashboardPane({ sim, snap, logs, onUserGesture, slowMo, onSlowMo, kit, onInspect, ml, walkScene }: PaneProps) {
   const P = sim.profile;
   return (
     <div className="space-y-3 p-3">
@@ -435,7 +419,7 @@ export function DashboardPane({ sim, snap, logs, onUserGesture, slowMo, onSlowMo
         <MetricsGrid snap={snap} profile={P} />
       </div>
       <Section title="Simulation & fault injection">
-        <Controls sim={sim} snap={snap} onUserGesture={onUserGesture} slowMo={slowMo} onSlowMo={onSlowMo} onAsset={onAsset} />
+        <Controls sim={sim} snap={snap} onUserGesture={onUserGesture} slowMo={slowMo} onSlowMo={onSlowMo} />
       </Section>
       <Section title="Anomaly score" right={<span className="font-mono text-[10px] text-zinc-600">client-side · Isolation Forest · synthetic baseline</span>}>
         <AnomalyPanel ml={ml} />

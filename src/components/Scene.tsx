@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Edges, OrbitControls } from '@react-three/drei';
@@ -13,7 +13,8 @@ import type { CameraShot, ShotName, V3 } from '../sim/shots';
 import { FLOOR_Y, HARNESS, NODE, PLATE_TOP, RIGS, SHAFT_Y, irRoute } from '../sim/mounts';
 import type { SensorKit } from '../sim/mounts';
 import type { HardwareId } from '../sim/hardwareSpecs';
-import { ASSETS, CONCEPT_ASSET_TAG } from '../sim/assets';
+import { ASSETS } from '../sim/assets';
+import { AssetSwitcher } from './AssetSwitcher';
 import type { AssetId } from '../sim/assets';
 import type { LabelRegistry } from './LabelLayer';
 import { SeverityBar } from './SeverityBar';
@@ -440,12 +441,27 @@ interface ViewportProps {
   xray: boolean;
   selected: HardwareId | null;
   onSelect: (id: HardwareId) => void;
+  onAsset: (id: AssetId) => void;
+}
+
+/** width of an element, tracked with ResizeObserver (0 until measured) */
+function useElementWidth(ref: React.RefObject<HTMLElement>): number {
+  const [w, setW] = useState(0);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    setW(el.getBoundingClientRect().width);
+    const ro = new ResizeObserver((e) => setW(e[0].contentRect.width));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref]);
+  return w;
 }
 
 function IconButton({ label, onClick, children }: { label: string; onClick: () => void; children: ReactNode }) {
   return (
     <button
-      className="pointer-events-auto flex h-7 w-7 items-center justify-center rounded-md border border-line bg-panel text-zinc-400 transition-colors hover:text-zinc-100"
+      className="pointer-events-auto flex h-full w-7 items-center justify-center border-l border-line text-zinc-400 outline-none transition-colors first:border-l-0 hover:text-zinc-100 focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-zinc-400"
       onClick={onClick}
       title={label}
       aria-label={label}
@@ -455,13 +471,18 @@ function IconButton({ label, onClick, children }: { label: string; onClick: () =
   );
 }
 
-export function Viewport({ sim, snap, paused, onTogglePause, muted, onToggleMute, alarms, onToggleAlarms, onUserGesture, shot, onFocus, walk, onStopWalk, slowMo, kit, xray, selected, onSelect }: ViewportProps) {
+export function Viewport({ sim, snap, paused, onTogglePause, muted, onToggleMute, alarms, onToggleAlarms, onUserGesture, shot, onFocus, walk, onStopWalk, slowMo, kit, xray, selected, onSelect, onAsset }: ViewportProps) {
   // the registry is filled by LabelProjector: the minimap reads the camera from it
   const registry = useRef<LabelRegistry>({ points: {}, cam: { x: 0, z: 0, tx: 0, tz: 0 }, size: { w: 1, h: 1 } });
   const pick = useMemo(() => ({ selected, onSelect }), [selected, onSelect]);
+  const box = useRef<HTMLDivElement>(null);
+  const width = useElementWidth(box);
+  // minimap: collapsed by default on canvases narrower than 1280 px; the user's toggle wins afterwards
+  const [mapOpen, setMapOpen] = useState<boolean | null>(null);
+  const mapExpanded = mapOpen ?? (width >= 1280);
 
   return (
-    <div className="relative h-full w-full bg-canvas" onPointerDown={onUserGesture}>
+    <div ref={box} className="relative h-full w-full bg-canvas" onPointerDown={onUserGesture}>
       <CanvasBoundary>
         <Canvas shadows dpr={[1, 1.75]} camera={{ position: HOME_POS, fov: 38, near: 0.1, far: 100 }} gl={{ antialias: true }}>
           <PickContext.Provider value={pick}>
@@ -470,11 +491,28 @@ export function Viewport({ sim, snap, paused, onTogglePause, muted, onToggleMute
         </Canvas>
       </CanvasBoundary>
 
-      <div className="pointer-events-none absolute left-3 top-3 flex gap-1.5">
-        <IconButton label={paused ? 'Resume simulation' : 'Pause simulation'} onClick={onTogglePause}>{paused ? <Play size={13} /> : <Pause size={13} />}</IconButton>
-        <IconButton label={muted ? 'Sound off (click to enable)' : 'Sound on (click to mute)'} onClick={onToggleMute}>{muted ? <VolumeX size={13} /> : <Volume2 size={13} />}</IconButton>
-        <IconButton label={alarms ? 'Alarm beeps on' : 'Alarm beeps off'} onClick={onToggleAlarms}>{alarms ? <Bell size={13} /> : <BellOff size={13} />}</IconButton>
-        {paused && <span className="font-mono flex h-7 items-center rounded-md border border-line bg-panel px-2 text-[11px] text-zinc-400">PAUSED</span>}
+      {/* top row: transport (left) · machine switcher (centre) · X-ray chip (right). Only controls take pointer events. */}
+      <div className="pointer-events-none absolute inset-x-3 top-3 grid grid-cols-[1fr_auto_1fr] items-start gap-2">
+        <div className="flex items-center gap-1.5 justify-self-start">
+          <div className="flex h-7 overflow-hidden rounded-md border border-line bg-panel" role="group" aria-label="Simulation">
+            <IconButton label={paused ? 'Resume simulation' : 'Pause simulation'} onClick={onTogglePause}>{paused ? <Play size={13} /> : <Pause size={13} />}</IconButton>
+            <IconButton label={muted ? 'Sound off (click to enable)' : 'Sound on (click to mute)'} onClick={onToggleMute}>{muted ? <VolumeX size={13} /> : <Volume2 size={13} />}</IconButton>
+            <IconButton label={alarms ? 'Alarm beeps on' : 'Alarm beeps off'} onClick={onToggleAlarms}>{alarms ? <Bell size={13} /> : <BellOff size={13} />}</IconButton>
+          </div>
+          {paused && <span className="font-mono flex h-7 items-center rounded-md border border-line bg-panel px-2 text-[11px] text-zinc-400">PAUSED</span>}
+        </div>
+        <div className="pointer-events-auto justify-self-center">
+          <AssetSwitcher
+            asset={snap.asset}
+            onChange={onAsset}
+            disabled={walk.active}
+            compact={width > 0 && width < 900}
+            kitPreview={ASSETS[snap.asset].scope === 'proposal' && kit === 'industrial'}
+          />
+        </div>
+        <div className="justify-self-end">
+          {xray && <span className="font-mono flex h-7 items-center rounded-md border border-line bg-panel px-2 text-[11px] text-zinc-300">X-RAY</span>}
+        </div>
       </div>
 
       {walk.active && (
@@ -489,28 +527,13 @@ export function Viewport({ sim, snap, paused, onTogglePause, muted, onToggleMute
         </div>
       )}
 
-      {ASSETS[snap.asset].scope === 'concept' ? (
-        <div className="pointer-events-none absolute right-3 top-3 max-w-[20rem] rounded-md border border-line bg-panel px-3 py-2 text-[11px] leading-snug text-zinc-400" role="note">
-          <div className="font-mono text-warn">{CONCEPT_ASSET_TAG}</div>
-          <div className="mt-0.5 text-zinc-300">{ASSETS[snap.asset].name}</div>
-          <div className="mt-0.5">Industrial-retrofit kit (concept, not in the proposed bill of materials).</div>
-        </div>
-      ) : kit === 'industrial' && (
-        <div className="pointer-events-none absolute right-3 top-3 max-w-[18rem] rounded-md border border-line bg-panel px-3 py-2 text-[11px] leading-snug text-zinc-400" role="note">
-          <div className="font-mono text-warn">CONCEPT · not in the proposed bill of materials</div>
-          <div className="mt-0.5">Industrial-retrofit kit preview on the DC bench rig. The CT clamp is AC only and could not measure this DC lead.</div>
-        </div>
-      )}
-      {xray && (
-        <div className="font-mono pointer-events-none absolute left-3 top-12 rounded-md border border-line bg-panel px-2 py-1 text-[11px] text-zinc-400">X-RAY · host machine at 25 %</div>
-      )}
 
       <div className="pointer-events-auto absolute bottom-3 left-3">
         <SeverityBar snap={snap} />
       </div>
 
       <div className="absolute bottom-3 right-3 hidden md:block">
-        <Minimap registry={registry} onFocus={onFocus} asset={snap.asset} />
+        <Minimap registry={registry} onFocus={onFocus} asset={snap.asset} expanded={mapExpanded} onToggle={() => setMapOpen(!mapExpanded)} />
       </div>
     </div>
   );
