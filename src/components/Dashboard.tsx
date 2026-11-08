@@ -5,6 +5,9 @@ import type { HealthState, LogLine, PresetName, SetpointKey, Simulator, Snapshot
 import { CONFIG as C } from '../sim/config';
 import { SpectrumChart, StripCharts } from './Charts';
 import { buildCsv, buildJson, downloadText, stamp } from '../sim/exporter';
+import type { SensorKit } from '../sim/mounts';
+import { HARDWARE_IDS, inspectorEntry } from '../sim/hardwareSpecs';
+import type { HardwareId } from '../sim/hardwareSpecs';
 
 type Tone = 'ok' | 'warn' | 'crit' | undefined;
 const TONE_TEXT: Record<'ok' | 'warn' | 'crit', string> = { ok: 'text-ok', warn: 'text-warn', crit: 'text-crit' };
@@ -261,6 +264,25 @@ export function EdgeTerminal({ logs, sim }: { logs: LogLine[]; sim: Simulator })
   );
 }
 
+// ------------------------------------------------------------------ hardware list (keyboard access to the inspector)
+export function HardwareList({ kit, onInspect }: { kit: SensorKit; onInspect: (id: HardwareId) => void }) {
+  return (
+    <div className="divide-y divide-line">
+      {HARDWARE_IDS.map((id) => {
+        const e = inspectorEntry(id, kit);
+        return (
+          <button key={id} onClick={() => onInspect(id)} className="flex w-full items-center gap-3 px-1 py-2 text-left transition-colors hover:bg-zinc-900">
+            <span className="w-28 shrink-0 text-xs text-zinc-200">{e.name}</span>
+            <span className="min-w-0 flex-1 truncate text-[11px] text-zinc-500">{e.part}</span>
+            {e.concept && <span className="font-mono shrink-0 text-[10px] text-warn">CONCEPT</span>}
+            <span className="font-mono shrink-0 text-[10px] text-zinc-600">{e.protocol.split(' ·')[0]}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 // ------------------------------------------------------------------ about
 export function About() {
   const [open, setOpen] = useState(false);
@@ -288,9 +310,11 @@ interface PaneProps {
   onUserGesture: () => void;
   slowMo: number;
   onSlowMo: (v: number) => void;
+  kit: SensorKit;
+  onInspect: (id: HardwareId) => void;
 }
 
-export function DashboardPane({ sim, snap, logs, onUserGesture, slowMo, onSlowMo }: PaneProps) {
+export function DashboardPane({ sim, snap, logs, onUserGesture, slowMo, onSlowMo, kit, onInspect }: PaneProps) {
   return (
     <div className="space-y-3 p-3">
       <div id="sec-health" className="scroll-mt-3 space-y-3">
@@ -298,6 +322,9 @@ export function DashboardPane({ sim, snap, logs, onUserGesture, slowMo, onSlowMo
         <InterlockCard sim={sim} snap={snap} onUserGesture={onUserGesture} />
         <MetricsGrid snap={snap} />
       </div>
+      <Section title="Machynex hardware" right={<span className="font-mono text-[10px] text-zinc-600">{kit === 'bench' ? 'bench kit' : 'industrial kit · preview'} · click to inspect</span>}>
+        <HardwareList kit={kit} onInspect={onInspect} />
+      </Section>
       <Section title="Fault injection">
         <Controls sim={sim} snap={snap} onUserGesture={onUserGesture} />
       </Section>
