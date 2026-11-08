@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Simulator } from './engine';
 import type { LogLine, Snapshot } from './engine';
 import { AudioEngine } from './audio';
+import { advanceRealTime, MAX_CATCH_UP_S } from './clock';
 
 export function useSimulator() {
   const simRef = useRef<Simulator | null>(null);
@@ -27,9 +28,10 @@ export function useSimulator() {
     let beepAcc = 2.2;
     const loop = (now: number) => {
       raf = requestAnimationFrame(loop);
-      const dt = Math.min(0.1, (now - last) / 1000);
+      // real elapsed time (capped at 1 s); the engine keeps its fixed 0.05 s tick, so low fps no longer slows the sim
+      const dt = Math.min(MAX_CATCH_UP_S, Math.max(0, (now - last) / 1000));
       last = now;
-      if (!pausedRef.current) sim.step(dt);
+      if (!pausedRef.current) advanceRealTime(sim, dt);
       // hum follows the live plant every frame (pitch drops smoothly during spin-down)
       audio.setMotor(pausedRef.current ? 0 : sim.live.rpm, sim.live.vibMeas);
       publishAcc += dt;
@@ -64,5 +66,14 @@ export function useSimulator() {
   const setMuted = useCallback((m: boolean) => { audio.setMuted(m); setMutedState(m); }, [audio]);
   const setAlarms = useCallback((a: boolean) => { audio.alarms = a; setAlarmsState(a); }, [audio]);
 
-  return { sim, snap, logs, paused, setPaused, muted, setMuted, alarms, setAlarms, unlock };
+  /** Simulator.reset() plus clearing the UI-side log buffer */
+  const resetSimulation = useCallback(() => {
+    sim.reset();
+    sim.drainEvents();
+    setLogs(sim.drainLogs());
+    setSnap(sim.getSnapshot());
+    setPaused(false);
+  }, [sim]);
+
+  return { sim, snap, logs, paused, setPaused, muted, setMuted, alarms, setAlarms, unlock, resetSimulation };
 }

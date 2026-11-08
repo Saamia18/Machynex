@@ -177,7 +177,10 @@ export class Simulator {
   private packets: PacketRecord[] = [];
   private eventLog: LogLine[] = [];
 
+  private readonly seed: number;
+
   constructor(seed = 1234) {
+    this.seed = seed;
     this.rand = mulberry32(seed);
     for (let i = 0; i < C.histLen; i++) {
       this.hVib[i] = this.vibMeas;
@@ -198,6 +201,18 @@ export class Simulator {
       this.tick(C.tickS);
       guard++;
     }
+  }
+
+  /**
+   * Full reset to the boot state: setpoints, plant, detection timers, ramps, histories, logs, capture and relay.
+   * Copies every field from a freshly constructed instance so nothing can be missed when fields are added.
+   * `live` is copied into the existing object because the 3D scene may hold a reference to it.
+   */
+  reset(): void {
+    const fresh = new Simulator(this.seed);
+    const live = this.live;
+    Object.assign(this, fresh);
+    this.live = Object.assign(live, fresh.live);
   }
 
   setTarget(key: SetpointKey, value: number): void {
