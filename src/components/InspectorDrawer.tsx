@@ -27,12 +27,14 @@ interface Props {
   id: HardwareId | null;
   kit: SensorKit;
   onKit: (k: SensorKit) => void;
+  /** concept machines always use the industrial kit */
+  kitLocked?: boolean;
   snap: Snapshot;
   onClose: () => void;
 }
 
 /** Slide-over spec sheet docked over the left edge of the right pane. Esc / Close dismiss it; Tab is trapped inside. */
-export function InspectorDrawer({ id, kit, onKit, snap, onClose }: Props) {
+export function InspectorDrawer({ id, kit, onKit, kitLocked = false, snap, onClose }: Props) {
   const ref = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const returnTo = useRef<Element | null>(null);
@@ -98,6 +100,7 @@ export function InspectorDrawer({ id, kit, onKit, snap, onClose }: Props) {
               <button
                 key={k}
                 onClick={() => onKit(k)}
+                disabled={kitLocked}
                 aria-pressed={kit === k}
                 className={`h-7 text-xs transition-colors ${i ? 'border-l border-line' : ''} ${kit === k ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:bg-zinc-900'}`}
               >
@@ -105,7 +108,8 @@ export function InspectorDrawer({ id, kit, onKit, snap, onClose }: Props) {
               </button>
             ))}
           </div>
-          {kit === 'industrial' && <p className="mt-1.5 text-[10px] leading-snug text-zinc-500">Preview of a future retrofit kit on the DC bench rig. Not part of the proposal; values marked unverified were not checked against a datasheet.</p>}
+          {kitLocked && <p className="mt-1.5 text-[10px] leading-snug text-zinc-500">This concept machine uses the industrial-retrofit kit; the bench kit belongs to the 12 V DC proposal rig.</p>}
+          {kit === 'industrial' && !kitLocked && <p className="mt-1.5 text-[10px] leading-snug text-zinc-500">Preview of a future retrofit kit on the DC bench rig. Not part of the proposal; values marked unverified were not checked against a datasheet.</p>}
         </div>
 
         <section>

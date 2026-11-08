@@ -3,6 +3,7 @@ import { Simulator } from './engine';
 import type { LogLine, Snapshot } from './engine';
 import { AudioEngine } from './audio';
 import { advanceRealTime, MAX_CATCH_UP_S } from './clock';
+import type { AssetId } from './assets';
 
 export function useSimulator() {
   const simRef = useRef<Simulator | null>(null);
@@ -75,5 +76,21 @@ export function useSimulator() {
     setPaused(false);
   }, [sim]);
 
-  return { sim, snap, logs, paused, setPaused, muted, setMuted, alarms, setAlarms, unlock, resetSimulation };
+  /** switch the machine (full reset into the asset's boot state) */
+  const setAsset = useCallback((id: AssetId) => {
+    sim.setAsset(id);
+    sim.drainEvents();
+    setLogs(sim.drainLogs());
+    setSnap(sim.getSnapshot());
+    setPaused(false);
+  }, [sim]);
+
+  /** dashboard-side log lines (anomaly monitor); negative ids never collide with engine ids */
+  const uiLogId = useRef(0);
+  const appendLogs = useCallback((lines: { kind: LogLine['kind']; t: number; text: string }[]) => {
+    if (!lines.length) return;
+    setLogs((prev) => [...prev, ...lines.map((l) => ({ ...l, id: --uiLogId.current }))].slice(-400));
+  }, []);
+
+  return { sim, snap, logs, paused, setPaused, muted, setMuted, alarms, setAlarms, unlock, resetSimulation, setAsset, appendLogs };
 }

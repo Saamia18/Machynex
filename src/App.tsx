@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useSimulator } from './sim/useSimulator';
 import { useWalkthrough } from './sim/walkthrough';
 import { makeShot } from './sim/shots';
@@ -10,29 +10,45 @@ import { InspectorDrawer } from './components/InspectorDrawer';
 import { CONFIG } from './sim/config';
 import type { SensorKit } from './sim/mounts';
 import type { HardwareId } from './sim/hardwareSpecs';
+import { ASSETS } from './sim/assets';
+import type { AssetId } from './sim/assets';
+import { useAnomaly } from './sim/useAnomaly';
 
 /** Honesty banner (CLAUDE.md §3.1). Always visible; tests/design-rules.test.ts asserts it is present. */
 export const BANNER_TEXT = 'PROPOSED CONCEPT · SYNTHETIC TELEMETRY · PROOF-OF-CONCEPT RIG · NO HARDWARE CONNECTED';
 
 export default function App() {
-  const { sim, snap, logs, paused, setPaused, muted, setMuted, alarms, setAlarms, unlock, resetSimulation } = useSimulator();
+  const { sim, snap, logs, paused, setPaused, muted, setMuted, alarms, setAlarms, unlock, resetSimulation, setAsset, appendLogs } = useSimulator();
   const [shot, setShot] = useState<CameraShot | null>(null);
   const [slowMo, setSlowMo] = useState(0.08);
   const [kit, setKit] = useState<SensorKit>(CONFIG.sensorKitDefault);
   const [xray, setXray] = useState(false);
   const [inspect, setInspect] = useState<HardwareId | null>(null);
   const closeInspector = useCallback(() => setInspect(null), []);
-  const focus = useCallback((name: ShotName) => setShot(makeShot(name)), []);
+  // camera shots follow the active machine's tap points
+  const assetRef = useRef<AssetId>(snap.asset);
+  assetRef.current = snap.asset;
+  const focus = useCallback((name: ShotName) => setShot(makeShot(name, assetRef.current)), []);
+  // concept machines always carry the industrial kit; the bench rig can preview it from the inspector
+  const effectiveKit: SensorKit = ASSETS[snap.asset].sensorKit === 'bench' ? kit : 'industrial';
+  const ml = useAnomaly(sim, snap, appendLogs);
   const scrollTo = useCallback((id: string) => {
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, []);
-  const { walk, startWalkthrough, stopWalkthrough } = useWalkthrough(sim, focus, scrollTo, unlock);
+  const { walk, startWalkthrough, stopWalkthrough } = useWalkthrough(sim, focus, scrollTo, unlock, setXray);
 
   const resetAll = useCallback(() => {
     if (walk.active) stopWalkthrough();
     resetSimulation();
     focus('home');
   }, [walk.active, stopWalkthrough, resetSimulation, focus]);
+
+  const switchAsset = useCallback((id: AssetId) => {
+    if (walk.active) stopWalkthrough();
+    setAsset(id);
+    assetRef.current = id;
+    setShot(makeShot('rig', id));
+  }, [walk.active, stopWalkthrough, setAsset]);
 
   return (
     <div className="flex h-[100dvh] flex-col overflow-hidden bg-canvas">
@@ -49,7 +65,7 @@ export default function App() {
         walkActive={walk.active}
         onStartWalk={startWalkthrough}
         onStopWalk={stopWalkthrough}
-        kit={kit}
+        kit={effectiveKit}
         xray={xray}
         onXray={() => setXray((v) => !v)}
       />
@@ -70,7 +86,7 @@ export default function App() {
             walk={walk}
             onStopWalk={stopWalkthrough}
             slowMo={slowMo}
-            kit={kit}
+            kit={effectiveKit}
             xray={xray}
             selected={inspect}
             onSelect={setInspect}
@@ -78,9 +94,9 @@ export default function App() {
         </div>
         <div className="relative min-h-0">
           <div className="scroll-thin h-full overflow-y-auto bg-canvas">
-            <DashboardPane sim={sim} snap={snap} logs={logs} onUserGesture={unlock} slowMo={slowMo} onSlowMo={setSlowMo} kit={kit} onInspect={setInspect} />
+            <DashboardPane sim={sim} snap={snap} logs={logs} onUserGesture={unlock} slowMo={slowMo} onSlowMo={setSlowMo} kit={effectiveKit} onInspect={setInspect} onAsset={switchAsset} ml={ml} walkScene={walk.active ? walk.scene : 0} />
           </div>
-          <InspectorDrawer id={inspect} kit={kit} onKit={setKit} snap={snap} onClose={closeInspector} />
+          <InspectorDrawer id={inspect} kit={effectiveKit} onKit={setKit} kitLocked={ASSETS[snap.asset].sensorKit !== 'bench'} snap={snap} onClose={closeInspector} />
         </div>
       </main>
     </div>

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { Simulator } from '../sim/engine';
 import { CONFIG as C } from '../sim/config';
+import { gmfHz } from '../sim/assets';
 
 type Draw = (ctx: CanvasRenderingContext2D, w: number, h: number) => void;
 
@@ -58,14 +59,20 @@ const MONO = '10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
 
 // ------------------------------------------------------------------ FFT: single flat trace
 /** Flat 1 px spectrum trace, 0-200 Hz, ticks every 25 Hz, dashed 1X marker. The engine's waterfall data is kept but not drawn (D8). */
-export function drawSpectrum(sim: Simulator, ctx: CanvasRenderingContext2D, w: number, h: number): void {
-  const { latest, f1 } = sim.getSpectrum();
+export interface SpectrumOpts {
+  /** walkthrough scene 2: flat bracket over the emerging fault peak (no glow) */
+  highlight?: boolean;
+}
+
+export function drawSpectrum(sim: Simulator, ctx: CanvasRenderingContext2D, w: number, h: number, opts: SpectrumOpts = {}): void {
+  const { latest, f1, maxHz } = sim.getSpectrum();
   const padL = 34, padR = 10, padT = 18, padB = 20;
   const pw = Math.max(1, w - padL - padR);
   const ph = Math.max(1, h - padT - padB);
   const n = latest.length;
   const yMax = 8.5;
-  const xOf = (f: number) => padL + (f / C.fftMaxHz) * pw;
+  const xOf = (f: number) => padL + (f / maxHz) * pw;
+  const tickHz = maxHz > 250 ? 50 : 25;
   const yOf = (v: number) => padT + ph - (Math.min(Math.max(v, 0), yMax) / yMax) * ph;
 
   ctx.fillStyle = PLOT_BG;
@@ -84,7 +91,7 @@ export function drawSpectrum(sim: Simulator, ctx: CanvasRenderingContext2D, w: n
   }
   // vertical grid + Hz ticks every 25 Hz
   ctx.textAlign = 'center';
-  for (let f = 0; f <= C.fftMaxHz; f += 25) {
+  for (let f = 0; f <= maxHz; f += tickHz) {
     const x = Math.round(xOf(f)) + 0.5;
     ctx.strokeStyle = f === 0 ? AXIS : GRID;
     ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + ph); ctx.stroke();
@@ -119,10 +126,40 @@ export function drawSpectrum(sim: Simulator, ctx: CanvasRenderingContext2D, w: n
     ctx.textAlign = 'left';
     ctx.fillText(`1X ${f1.toFixed(2)} Hz`, Math.min(x + 4, w - 84), padT - 6);
   }
+
+  // gear-mesh frequency marker (gearbox concept: tooth counts are assumed)
+  const gmf = f1 > 1 ? gmfHz(sim.profile, sim.live.rpm) : null;
+  if (gmf && gmf < maxHz) {
+    const x = Math.round(xOf(gmf)) + 0.5;
+    ctx.strokeStyle = '#71717a';
+    ctx.setLineDash([2, 4]);
+    ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + ph); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#a1a1aa';
+    ctx.textAlign = 'right';
+    ctx.fillText(`GMF ${gmf.toFixed(1)} Hz (assumed ${sim.profile.gear!.pinionTeeth} teeth)`, Math.max(x - 4, padL + 200), padT + 12);
+  }
+
+  // flat bracket over the dominant fault peak (ignores the first few bins)
+  if (opts.highlight && f1 > 1) {
+    let k = 3;
+    for (let i = 3; i < n; i++) if (latest[i] > latest[k]) k = i;
+    const fx = padL + (k / Math.max(1, n - 1)) * pw;
+    const top = Math.max(padT + 2, yOf(latest[k]) - 8);
+    const half = 9;
+    ctx.strokeStyle = '#e4e4e7';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(fx - half + 0.5, top + 6); ctx.lineTo(fx - half + 0.5, top + 0.5); ctx.lineTo(fx + half + 0.5, top + 0.5); ctx.lineTo(fx + half + 0.5, top + 6);
+    ctx.stroke();
+    ctx.fillStyle = '#e4e4e7';
+    ctx.textAlign = fx > padL + pw - 120 ? 'right' : 'left';
+    ctx.fillText('emerging peak', ctx.textAlign === 'right' ? fx - half - 4 : fx + half + 4, top + 6);
+  }
 }
 
-export function SpectrumChart({ sim }: { sim: Simulator }) {
-  const ref = useAnimatedCanvas((ctx, w, h) => drawSpectrum(sim, ctx, w, h), 20);
+export function SpectrumChart({ sim, highlight = false }: { sim: Simulator; highlight?: boolean }) {
+  const ref = useAnimatedCanvas((ctx, w, h) => drawSpectrum(sim, ctx, w, h, { highlight }), 20);
   return <canvas ref={ref} className="block h-48 w-full" aria-label="Vibration spectrum, 0 to 200 Hz (synthetic)" />;
 }
 
@@ -201,11 +238,15 @@ export function StripChart(props: StripProps) {
 }
 
 export function StripCharts({ sim }: { sim: Simulator }) {
+  // thresholds and scales come from the active asset profile (illustrative)
+  const P = sim.profile;
+  const curMax = Math.ceil(Math.max(5.5, P.th.curCrit * 1.25));
+  const tempMax = Math.max(100, Math.ceil((P.th.tempCrit + 15) / 10) * 10);
   return (
-    <div className="space-y-3">
-      <StripChart sim={sim} title="Vibration RMS" unit="mm/s" pick={(h) => h.vib} min={0} max={10} warn={C.vib.warn} crit={C.vib.crit} />
-      <StripChart sim={sim} title="Motor current" unit="A" pick={(h) => h.cur} min={0} max={5.5} crit={C.current.crit} />
-      <StripChart sim={sim} title="Stator temperature" unit="°C" pick={(h) => h.temp} min={20} max={100} warn={C.temp.warn} crit={C.temp.crit} decimals={1} />
+    <div className="space-y-3" key={P.id}>
+      <StripChart sim={sim} title="Vibration RMS" unit="mm/s" pick={(h) => h.vib} min={0} max={10} warn={P.th.vibWarn} crit={P.th.vibCrit} />
+      <StripChart sim={sim} title="Motor current" unit="A" pick={(h) => h.cur} min={0} max={curMax} crit={P.th.curCrit} />
+      <StripChart sim={sim} title="Temperature" unit="°C" pick={(h) => h.temp} min={20} max={tempMax} warn={P.th.tempWarn} crit={P.th.tempCrit} decimals={1} />
     </div>
   );
 }
