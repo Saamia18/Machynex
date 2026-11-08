@@ -1,14 +1,17 @@
 import { CONFIG as C } from './config';
+import { ASSETS, CONCEPT_ASSET_TAG, DEFAULT_ASSET } from './assets';
+import type { AssetId, AssetProfile } from './assets';
 
 export type HealthState = 'NORMAL' | 'EARLY' | 'CRITICAL';
 export type PresetName = 'baseline' | 'progressive' | 'shock' | 'critical';
-export type SetpointKey = 'massG' | 'currentA' | 'tempC' | 'rpm';
+export type SetpointKey = 'massG' | 'currentA' | 'tempC' | 'rpm' | 'severity';
 export type LogKind = 'STATE' | 'FILTER' | 'TRIP' | 'RESET' | 'INFO' | 'PACKET';
 export type SimEvent = 'trip' | 'reset';
 export type VibZone = 'A' | 'B' | 'C' | 'D';
 
 export interface PacketRecord {
   t: number;
+  severity: number;
   state: HealthState;
   zone: VibZone;
   rpm: number;
@@ -21,6 +24,8 @@ export interface PacketRecord {
 
 export interface Setpoints {
   massG: number;
+  /** 0..1 fault severity for concept assets whose fault is not a mass unbalance */
+  severity: number;
   currentA: number;
   tempC: number;
   rpm: number;
@@ -36,6 +41,7 @@ export interface LogLine {
 
 export interface Snapshot {
   t: number;
+  asset: AssetId;
   state: HealthState;
   stateLabel: string;
   relayClosed: boolean;
@@ -72,8 +78,8 @@ export const STATE_LABEL: Record<HealthState, string> = {
 };
 
 /** ISO 10816-style zone bands (illustrative for this rig): A good, B acceptable, C advisory, D unacceptable */
-export function vibZone(v: number): VibZone {
-  const z = C.vib.zones;
+export function vibZone(v: number, zones: readonly number[] = C.vib.zones): VibZone {
+  const z = zones;
   return v < z[0] ? 'A' : v < z[1] ? 'B' : v < z[2] ? 'C' : 'D';
 }
 
@@ -101,17 +107,13 @@ export function vibFromMass(massG: number, rpm: number): number {
 
 export class Simulator {
   t = 0;
+  /** active asset profile (bench rig by default) */
+  profile: AssetProfile;
   private acc = 0;
   private rand: () => number;
   private logId = 0;
 
-  sp: Setpoints = {
-    massG: C.massDefault,
-    currentA: C.currentNominal,
-    tempC: C.tempNominal,
-    rpm: C.nominalRpm,
-    coupling: false,
-  };
+  sp: Setpoints;
 
   // live plant values (read by the 3D scene every frame)
   live: {
@@ -124,16 +126,6 @@ export class Simulator {
     state: HealthState;
     relayClosed: boolean;
     shockActive: boolean;
-  } = {
-    rpm: C.nominalRpm,
-    vibMeas: vibFromMass(C.massDefault, C.nominalRpm),
-    vibTrue: vibFromMass(C.massDefault, C.nominalRpm),
-    temp: C.tempNominal,
-    current: C.currentNominal,
-    massG: C.massDefault,
-    state: 'NORMAL',
-    relayClosed: true,
-    shockActive: false,
   };
 
   state: HealthState = 'NORMAL';
@@ -142,7 +134,7 @@ export class Simulator {
   private ramps: Ramp[] = [];
   private shockRemaining = 0;
   private vibWindow: number[] = [];
-  private vibTrend = vibFromMass(C.massDefault, C.nominalRpm);
+  private vibTrend: number;
   private trendBuf: number[] = [];
   private timers = {
     vib: [0, 0, 0],
@@ -157,9 +149,9 @@ export class Simulator {
   private evidence = { vib: false, temp: false, cur: false };
 
   // measured values
-  private vibMeas: number = this.live.vibMeas;
-  private tempMeas: number = C.tempNominal;
-  private curMeas: number = C.currentNominal;
+  private vibMeas: number;
+  private tempMeas: number;
+  private curMeas: number;
 
   // histories (ring buffers, 10 s)
   private hVib = new Float32Array(C.histLen);
@@ -179,9 +171,20 @@ export class Simulator {
 
   private readonly seed: number;
 
-  constructor(seed = 1234) {
+  constructor(seed = 1234, assetId: AssetId = DEFAULT_ASSET) {
     this.seed = seed;
     this.rand = mulberry32(seed);
+    const P = (this.profile = ASSETS[assetId]);
+    this.sp = { massG: C.massDefault, severity: 0, currentA: P.nominal.current, tempC: P.nominal.temp, rpm: P.nominal.rpm, coupling: false };
+    const v0 = P.vib(this.sp, P.nominal.rpm);
+    this.live = {
+      rpm: P.nominal.rpm, vibMeas: v0, vibTrue: v0, temp: P.nominal.temp, current: P.nominal.current,
+      massG: C.massDefault, state: 'NORMAL', relayClosed: true, shockActive: false,
+    };
+    this.vibTrend = v0;
+    this.vibMeas = v0;
+    this.tempMeas = P.nominal.temp;
+    this.curMeas = P.nominal.current;
     for (let i = 0; i < C.histLen; i++) {
       this.hVib[i] = this.vibMeas;
       this.hCur[i] = this.curMeas;
@@ -209,18 +212,29 @@ export class Simulator {
    * `live` is copied into the existing object because the 3D scene may hold a reference to it.
    */
   reset(): void {
-    const fresh = new Simulator(this.seed);
+    const fresh = new Simulator(this.seed, this.profile.id);
     const live = this.live;
     Object.assign(this, fresh);
     this.live = Object.assign(live, fresh.live);
   }
 
+  /** switch the machine: full reset into the new asset's boot state */
+  setAsset(id: AssetId): void {
+    if (!ASSETS[id]) return;
+    this.profile = ASSETS[id];
+    this.reset();
+    const P = this.profile;
+    this.log('INFO', `Asset: ${P.name}. Fault model: ${P.faultName}.${P.scope === 'concept' ? ` ${CONCEPT_ASSET_TAG}.` : ''}`);
+  }
+
   setTarget(key: SetpointKey, value: number): void {
+    const L = this.profile.limits;
     const lim = {
       massG: [C.massMin, C.massMax],
-      currentA: [C.currentMin, C.currentMax],
-      tempC: [C.tempMin, C.tempMax],
-      rpm: [C.rpmMin, C.rpmMax],
+      severity: [0, 1],
+      currentA: L.current,
+      tempC: L.temp,
+      rpm: L.rpm,
     }[key];
     this.ramps = this.ramps.filter((r) => r.key !== key);
     this.sp[key] = clamp(value, lim[0], lim[1]);
@@ -238,34 +252,56 @@ export class Simulator {
 
   preset(name: PresetName): void {
     switch (name) {
-      case 'baseline':
+      case 'baseline': {
+        const N = this.profile.nominal;
         this.sp.coupling = false;
         this.ramp('massG', C.massDefault, 1.0);
-        this.ramp('currentA', C.currentNominal, 1.0);
-        this.ramp('tempC', C.tempNominal, 1.0);
-        this.ramp('rpm', C.nominalRpm, 1.0);
-        this.log('INFO', 'Preset: Nominal (0.15 g, 1.2 A, 38 C, 1450 rpm).');
+        this.ramp('currentA', N.current, 1.0);
+        this.ramp('tempC', N.temp, 1.0);
+        this.ramp('rpm', N.rpm, 1.0);
+        if (this.profile.faultControl === 'severity') this.ramp('severity', 0, 1.0);
+        this.log('INFO', this.profile.faultControl === 'mass'
+          ? `Preset: Nominal (0.15 g, ${N.current} A, ${N.temp} C, ${N.rpm} rpm).`
+          : `Preset: Nominal (fault severity 0, ${N.current} A, ${N.temp} C, ${N.rpm} rpm).`);
         if (!this.relayClosed) this.log('INFO', 'Safety cut-off is still open. Press Reset Interlock after the fault is cleared.');
         break;
-      case 'progressive':
-        this.sp.massG = C.massDefault;
-        this.ramps = this.ramps.filter((r) => r.key !== 'massG');
-        this.ramp('currentA', C.currentNominal, 0.5);
-        this.ramp('tempC', C.tempNominal, 0.5);
-        this.ramp('rpm', C.nominalRpm, 0.5);
-        this.ramp('massG', 0.65, 8.0, false);
-        this.log('INFO', 'Preset: Imbalance, progressive (0.15 g to 0.65 g over 8 s).');
+      }
+      case 'progressive': {
+        const P = this.profile;
+        if (P.faultControl === 'mass') {
+          this.sp.massG = C.massDefault;
+          this.ramps = this.ramps.filter((r) => r.key !== 'massG');
+        } else {
+          this.sp.severity = 0;
+          this.ramps = this.ramps.filter((r) => r.key !== 'severity');
+        }
+        this.ramp('currentA', P.nominal.current, 0.5);
+        this.ramp('tempC', P.nominal.temp, 0.5);
+        this.ramp('rpm', P.nominal.rpm, 0.5);
+        if (P.faultControl === 'mass') {
+          this.ramp('massG', P.presets.progressiveTo, 8.0, false);
+          this.log('INFO', `Preset: Imbalance, progressive (0.15 g to ${P.presets.progressiveTo} g over 8 s).`);
+        } else {
+          this.ramp('severity', P.presets.progressiveTo, 8.0, false);
+          this.log('INFO', `Preset: ${P.faultName}, progressive (severity 0 to ${P.presets.progressiveTo} over 8 s).`);
+        }
         break;
+      }
       case 'shock':
         this.shockRemaining = C.shock.durS;
         this.log('INFO', 'Preset: Transient knock injected (300 ms).');
         break;
-      case 'critical':
-        this.ramp('massG', 1.1, 1.2);
-        this.ramp('currentA', 4.4, 1.2);
-        this.ramp('tempC', 82, 2.0);
-        this.log('INFO', 'Preset: Critical Fault (vibration, current and temperature spiking).');
+      case 'critical': {
+        const P = this.profile;
+        const c = P.presets.critical;
+        this.ramp(P.faultControl === 'mass' ? 'massG' : 'severity', c.fault, 1.2);
+        this.ramp('currentA', c.currentA, 1.2);
+        this.ramp('tempC', c.tempC, 2.0);
+        this.log('INFO', P.faultControl === 'mass'
+          ? 'Preset: Critical Fault (vibration, current and temperature spiking).'
+          : `Preset: Critical Fault (${P.faultName}: vibration and temperature spiking).`);
         break;
+      }
     }
   }
 
@@ -275,10 +311,12 @@ export class Simulator {
 
   /** true if the setpoints (at nominal conditions) would still trip the cut-off */
   faultPresent(): boolean {
+    const P = this.profile;
+    const sev = P.severityOf(this.sp);
     return (
-      vibFromMass(this.sp.massG, this.sp.rpm) >= C.vib.crit ||
-      this.sp.tempC >= C.temp.crit ||
-      this.sp.currentA >= C.current.crit
+      P.vib(this.sp, this.sp.rpm) >= P.th.vibCrit ||
+      this.sp.tempC + P.tempDelta(sev) >= P.th.tempCrit ||
+      this.sp.currentA + P.currentDelta(sev) >= P.th.curCrit
     );
   }
 
@@ -321,8 +359,10 @@ export class Simulator {
     const accG = (vib * 1e-3 * 2 * Math.PI * Math.max(f, 0.01)) / 9.81;
     const n = Number(this.evidence.vib) + Number(this.evidence.temp) + Number(this.evidence.cur);
     const confidence = n === 0 ? 'NONE' : n === 1 ? 'LOW' : n === 2 ? 'MEDIUM' : 'HIGH';
+    const th = this.profile.th;
     return {
       t: this.t,
+      asset: this.profile.id,
       state: this.state,
       stateLabel: STATE_LABEL[this.state],
       relayClosed: this.relayClosed,
@@ -330,8 +370,8 @@ export class Simulator {
       massG: this.live.massG,
       vib,
       vibAccG: accG,
-      vibBand: vib >= C.vib.crit ? 'CRITICAL' : vib >= C.vib.warn ? 'ADVISORY' : 'NORMAL',
-      vibZone: vibZone(vib),
+      vibBand: vib >= th.vibCrit ? 'CRITICAL' : vib >= th.vibWarn ? 'ADVISORY' : 'NORMAL',
+      vibZone: vibZone(vib, th.zones),
       current: this.curMeas,
       temp: this.tempMeas,
       evidence: { ...this.evidence },
@@ -357,8 +397,8 @@ export class Simulator {
     return { vib, cur, temp };
   }
 
-  getSpectrum(): { latest: Float32Array; waterfall: Float32Array[]; f1: number } {
-    return { latest: this.spectrum, waterfall: this.waterfall, f1: this.live.rpm / 60 };
+  getSpectrum(): { latest: Float32Array; waterfall: Float32Array[]; f1: number; maxHz: number } {
+    return { latest: this.spectrum, waterfall: this.waterfall, f1: this.live.rpm / 60, maxHz: this.profile.spectrum.maxHz };
   }
 
   // ------------------------------------------------------------------ internals
@@ -414,16 +454,18 @@ export class Simulator {
     if (this.relayClosed) {
       L.rpm += (this.sp.rpm - L.rpm) * (1 - Math.exp(-dt / C.spinUpTau));
     } else {
-      L.rpm = Math.max(0, L.rpm * Math.exp(-dt / C.spinDownTau) - C.coulombRpmPerS * dt);
+      L.rpm = Math.max(0, L.rpm * Math.exp(-dt / C.spinDownTau) - this.profile.coulombRpmPerS * dt);
       if (L.rpm < 1) L.rpm = 0;
     }
+    const P = this.profile;
     L.massG = this.sp.massG;
-    L.vibTrue = vibFromMass(L.massG, L.rpm);
+    L.vibTrue = P.vib(this.sp, L.rpm);
+    const sev = P.severityOf(this.sp);
 
     const coupVib = this.sp.coupling ? Math.max(0, L.vibTrue - 1.0) : 0;
-    const tempTarget = this.sp.tempC + 0.6 * coupVib;
+    const tempTarget = this.sp.tempC + P.tempDelta(sev) + 0.6 * coupVib;
     L.temp += (tempTarget - L.temp) * (1 - Math.exp(-dt / C.tempTau));
-    const curTarget = this.relayClosed ? this.sp.currentA + 0.03 * coupVib : 0;
+    const curTarget = this.relayClosed ? Math.max(0, this.sp.currentA + P.currentDelta(sev)) + 0.03 * coupVib : 0;
     L.current += (curTarget - L.current) * (1 - Math.exp(-dt / C.currentTau));
   }
 
@@ -467,8 +509,9 @@ export class Simulator {
     }
     const den = n * sxx - sx * sx;
     const slope = den === 0 ? 0 : (n * sxy - sx * sy) / den;
-    if (slope > C.leadTime.minSlope && this.vibTrend < C.vib.crit) {
-      const est = (C.vib.crit - this.vibTrend) / slope;
+    const crit = this.profile.th.vibCrit;
+    if (slope > C.leadTime.minSlope && this.vibTrend < crit) {
+      const est = (crit - this.vibTrend) / slope;
       this.leadTimeS = est <= C.leadTime.maxShownS ? est : null;
     } else {
       this.leadTimeS = null;
@@ -476,9 +519,10 @@ export class Simulator {
   }
 
   private level(vibCh: number, tempCh: number, curCh: number): [number, number, number] {
-    const v = vibCh >= C.vib.crit ? 2 : vibCh >= C.vib.warn ? 1 : 0;
-    const t = tempCh >= C.temp.crit ? 2 : tempCh >= C.temp.warn ? 1 : 0;
-    const c = curCh >= C.current.crit ? 2 : 0;
+    const th = this.profile.th;
+    const v = vibCh >= th.vibCrit ? 2 : vibCh >= th.vibWarn ? 1 : 0;
+    const t = tempCh >= th.tempCrit ? 2 : tempCh >= th.tempWarn ? 1 : 0;
+    const c = curCh >= th.curCrit ? 2 : 0;
     return [v, t, c];
   }
 
@@ -498,12 +542,12 @@ export class Simulator {
     // evidence channels (used for corroboration / confidence)
     this.evidence = {
       vib: cand.vib >= 1,
-      temp: this.tempMeas >= C.temp.corroborate,
-      cur: this.curMeas >= C.current.corroborate,
+      temp: this.tempMeas >= this.profile.th.tempCorroborate,
+      cur: this.curMeas >= this.profile.th.curCorroborate,
     };
 
     // transient vibration episode tracking (for filter log)
-    if (this.vibMeas >= C.vib.warn) {
+    if (this.vibMeas >= this.profile.th.vibWarn) {
       if (!this.episode.active) {
         this.episode = { active: true, start: this.t, peak: this.vibMeas, escalated: false };
       } else {
@@ -586,11 +630,13 @@ export class Simulator {
         i_A: Number(this.curMeas.toFixed(2)),
         temp_C: Number(this.tempMeas.toFixed(1)),
         state: this.state,
-        zone: vibZone(this.vibMeas),
+        zone: vibZone(this.vibMeas, this.profile.th.zones),
+        asset: this.profile.id,
         synthetic: true,
       };
       this.packets.push({
         t: pkt.t, state: this.state, zone: pkt.zone, rpm: pkt.rpm, massG: Number(this.live.massG.toFixed(3)),
+        severity: Number(this.profile.severityOf(this.sp).toFixed(3)),
         vib: pkt.vib_mm_s, current: pkt.i_A, temp: pkt.temp_C, relayClosed: this.relayClosed,
       });
       if (this.packets.length > C.captureMax) this.packets.shift();
@@ -599,8 +645,12 @@ export class Simulator {
   }
 
   private computeSpectrum(): void {
+    if (this.profile.spectrum.model !== 'unbalance') {
+      this.computeFaultSpectrum();
+      return;
+    }
     const N = C.fftBins;
-    const df = C.fftMaxHz / N;
+    const df = this.profile.spectrum.maxHz / N;
     const f1 = this.live.rpm / 60;
     const a1 = this.live.vibTrue;
     const spec = new Float32Array(N);
@@ -617,6 +667,32 @@ export class Simulator {
         v += peak(2 * f1, 0.1 * a1 + 0.03, 0.8, i);
         v += peak(3 * f1, 0.04 * a1 + 0.015, 0.9, i);
         v += peak(82, 0.05 + 0.012 * a1, 6, i); // rig-body resonance (illustrative)
+      }
+      spec[i] = v;
+    }
+    this.spectrum = spec;
+    this.waterfall.push(spec);
+    if (this.waterfall.length > C.waterfallLen) this.waterfall.shift();
+  }
+
+  /** concept assets: broadband floor + profile peaks (cavitation, gear mesh with sidebands); illustrative */
+  private computeFaultSpectrum(): void {
+    const P = this.profile;
+    const N = C.fftBins;
+    const df = P.spectrum.maxHz / N;
+    const f1 = this.live.rpm / 60;
+    const run = Math.min(1, this.live.rpm / Math.max(1, P.nominal.rpm));
+    const sev = P.severityOf(this.sp);
+    const floor = (P.spectrum.floor?.(sev) ?? 0.015) * run * run;
+    const peaks = f1 > 1 ? (P.spectrum.peaks?.(f1, sev) ?? []) : [];
+    const shock = this.shockRemaining > 0 ? 0.5 * Math.sin(Math.PI * clamp(1 - this.shockRemaining / C.shock.durS, 0, 1)) : 0;
+    const spec = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      const f = i * df;
+      let v = 0.012 + floor * (0.6 + 0.8 * Math.abs(this.randn())) + shock;
+      for (const pk of peaks) {
+        const x = (f - pk.f) / pk.sigma;
+        if (Math.abs(x) < 6) v += pk.amp * run * run * Math.exp(-0.5 * x * x);
       }
       spec[i] = v;
     }

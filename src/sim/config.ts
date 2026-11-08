@@ -29,8 +29,8 @@ export const CONFIG = {
 
   // plant dynamics
   spinUpTau: 0.8,
-  spinDownTau: 1.6,
-  coulombRpmPerS: 120,
+  spinDownTau: 1.2, // with the per-asset coulomb term (assets.ts) the shaft stops in 2.5 s from nominal (D11)
+  coulombRpmPerS: 120, // legacy value (3.45 s stop); assets.ts now supplies the coulomb term per asset
   tempTau: 2.5, // thermal response is time-compressed for the demo
   currentTau: 0.25,
 
