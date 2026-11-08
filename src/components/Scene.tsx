@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Edges, OrbitControls } from '@react-three/drei';
@@ -10,80 +10,20 @@ import type { WalkState } from '../sim/walkthrough';
 import { CONFIG as C } from '../sim/config';
 import { HOME_POS, HOME_TARGET } from '../sim/shots';
 import type { CameraShot, ShotName, V3 } from '../sim/shots';
+import { BENCH_MOUNTS, FLOOR_Y, HARNESS, HARNESS_BENCH_SIGNAL, HARNESS_INDUSTRIAL, NODE, PLATE_TOP, SHAFT_Y } from '../sim/mounts';
+import type { SensorKit } from '../sim/mounts';
+import type { HardwareId } from '../sim/hardwareSpecs';
 import type { LabelRegistry } from './LabelLayer';
 import { SeverityBar } from './SeverityBar';
 import { Minimap } from './Minimap';
 import { TripFx } from './Fx';
 import { CanvasBoundary } from './CanvasBoundary';
-
-const SHAFT_Y = 0.85;
-const FLOOR_Y = -0.32;
-
-
-// stable point arrays so cable geometry is built once, not on every render
-const CABLE_SUPPLY: V3[] = [[-1.5, FLOOR_Y + 0.15, 2.3], [-1.0, -0.2, 2.35], [-0.6, -0.07, 2.35]];
-const CABLE_MOTOR_LEAD: V3[] = [[-2.1, SHAFT_Y + 0.5, 0], [-2.35, 1.2, 0.5], [-1.5, 0.5, 0.85], [-0.6, 0.16, 0.72]];
-const CABLE_TEMP: V3[] = [[-1.85, SHAFT_Y + 0.6, 0], [-1.7, 1.75, 0.5], [-0.6, 1.0, 1.7], [-0.15, 0.2, 2.3]];
-const CABLE_ACCEL: V3[] = [[0.5, SHAFT_Y + 0.3, 0.08], [0.55, 1.5, 0.8], [0.4, 0.7, 1.9], [0.2, 0.2, 2.3]];
-const CABLE_CURRENT: V3[] = [[-0.6, 0.16, 0.8], [-0.4, 0.1, 1.5], [0.0, 0.0, 2.3]];
-
-// ------------------------------------------------------------------ small procedural helpers
-interface CylProps {
-  r: number;
-  len: number;
-  pos: V3;
-  axis?: 'x' | 'y' | 'z';
-  color: string;
-  metal?: number;
-  rough?: number;
-  seg?: number;
-  emissive?: string;
-  emissiveIntensity?: number;
-  opacity?: number;
-  cast?: boolean;
-}
-function Cyl({ r, len, pos, axis = 'y', color, metal = 0.45, rough = 0.45, seg = 40, emissive, emissiveIntensity = 0, opacity = 1, cast = true }: CylProps) {
-  const rot: V3 = axis === 'x' ? [0, 0, Math.PI / 2] : axis === 'z' ? [Math.PI / 2, 0, 0] : [0, 0, 0];
-  return (
-    <mesh position={pos} rotation={rot} castShadow={cast} receiveShadow>
-      <cylinderGeometry args={[r, r, len, seg]} />
-      <meshStandardMaterial color={color} metalness={metal} roughness={rough} emissive={emissive ?? '#000000'} emissiveIntensity={emissiveIntensity} transparent={opacity < 1} opacity={opacity} />
-    </mesh>
-  );
-}
-
-interface BoxProps {
-  size: V3;
-  pos: V3;
-  color: string;
-  metal?: number;
-  rough?: number;
-  opacity?: number;
-  emissive?: string;
-  emissiveIntensity?: number;
-  cast?: boolean;
-}
-function Box({ size, pos, color, metal = 0.4, rough = 0.5, opacity = 1, emissive, emissiveIntensity = 0, cast = true }: BoxProps) {
-  return (
-    <mesh position={pos} castShadow={cast} receiveShadow>
-      <boxGeometry args={size} />
-      <meshStandardMaterial color={color} metalness={metal} roughness={rough} emissive={emissive ?? '#000000'} emissiveIntensity={emissiveIntensity} transparent={opacity < 1} opacity={opacity} />
-    </mesh>
-  );
-}
-
-function Cable({ points, color = '#111827', radius = 0.02 }: { points: V3[]; color?: string; radius?: number }) {
-  const geo = useMemo(() => {
-    const curve = new THREE.CatmullRomCurve3(points.map((p) => new THREE.Vector3(p[0], p[1], p[2])));
-    return new THREE.TubeGeometry(curve, 32, radius, 6, false);
-  }, [points, radius]);
-  useEffect(() => () => geo.dispose(), [geo]);
-  return (
-    <mesh geometry={geo} castShadow>
-      <meshStandardMaterial color={color} roughness={0.7} metalness={0.1} />
-    </mesh>
-  );
-}
+import { Box, Cable, Cyl, PickContext, applyXray, useBraidTexture } from './hardware/primitives';
+import { EdgeNode } from './hardware/EdgeNode';
+import type { NodeLeds } from './hardware/EdgeNode';
+import { VibrationPuck } from './hardware/VibrationPuck';
+import { CurrentSensor } from './hardware/CurrentSensor';
+import { IrPod, TempProbe } from './hardware/TempSensor';
 
 // ------------------------------------------------------------------ static rig (does not vibrate)
 const BaseRig = memo(function BaseRig() {
@@ -95,8 +35,7 @@ const BaseRig = memo(function BaseRig() {
       {rails.map((p, i) => (
         <group key={i}>
           <Box size={[6.2, 0.2, 0.2]} pos={p} color="#9aa3ad" metal={0.65} rough={0.4} />
-          {/* T-slot channels */}
-          <Box size={[6.2, 0.02, 0.07]} pos={[p[0], p[1] + 0.101, p[2]]} color="#1f2937" cast={false} />
+          {/* T-slot channel */}
           <Box size={[6.2, 0.07, 0.02]} pos={[p[0], p[1], p[2] + (p[2] > 0 ? 0.101 : -0.101)]} color="#1f2937" cast={false} />
         </group>
       ))}
@@ -106,6 +45,8 @@ const BaseRig = memo(function BaseRig() {
           <Box size={[0.02, 0.07, 2.2]} pos={[x + 0.101, -0.1, 0]} color="#1f2937" cast={false} />
         </group>
       ))}
+      {/* aluminium base plate the motor cradle and bearing bolt to (sits on the rails, so nothing floats) */}
+      <Box size={[4.4, PLATE_TOP, 2.3]} pos={[-0.5, PLATE_TOP / 2, 0]} color="#6b7280" metal={0.6} rough={0.5} />
       {/* corner brackets */}
       {[[-3.1, 1.0], [-3.1, -1.0], [2.9, 1.0], [2.9, -1.0]].map(([x, z], i) => (
         <Box key={i} size={[0.32, 0.05, 0.32]} pos={[x, 0.025, z]} color="#cbd5e1" metal={0.7} rough={0.35} />
@@ -114,50 +55,6 @@ const BaseRig = memo(function BaseRig() {
       {feet.map((p, i) => (
         <Cyl key={i} r={0.14} len={0.12} pos={p} color="#0a0a0a" metal={0} rough={0.95} />
       ))}
-    </group>
-  );
-});
-
-// ------------------------------------------------------------------ edge box + supply (static)
-interface EdgeLedRefs {
-  g: RefObject<THREE.MeshStandardMaterial>;
-  a: RefObject<THREE.MeshStandardMaterial>;
-  r: RefObject<THREE.MeshStandardMaterial>;
-  relay: RefObject<THREE.MeshStandardMaterial>;
-}
-const EdgeBox = memo(function EdgeBox({ leds }: { leds: EdgeLedRefs }) {
-  const ex = 0.2, ey = -0.07, ez = 2.35;
-  return (
-    <group>
-      {/* enclosure */}
-      <Box size={[1.6, 0.5, 0.8]} pos={[ex, ey, ez]} color="#18181b" metal={0.3} rough={0.6} />
-      <Box size={[1.6, 0.03, 0.8]} pos={[ex, ey + 0.265, ez]} color="#7dd3fc" opacity={0.18} metal={0} rough={0.1} cast={false} />
-      {/* ESP32 dev board */}
-      <Box size={[0.72, 0.03, 0.3]} pos={[ex - 0.35, ey + 0.1, ez - 0.05]} color="#0f172a" metal={0.2} rough={0.6} cast={false} />
-      <Box size={[0.3, 0.035, 0.2]} pos={[ex - 0.42, ey + 0.13, ez - 0.05]} color="#d4d4d8" metal={0.8} rough={0.3} cast={false} />
-      {/* safety cut-off module (concept) */}
-      <Box size={[0.42, 0.12, 0.26]} pos={[ex + 0.45, ey + 0.1, ez - 0.05]} color="#111827" metal={0.2} rough={0.6} cast={false} />
-      <mesh position={[ex + 0.62, ey + 0.18, ez - 0.05]}>
-        <sphereGeometry args={[0.03, 12, 12]} />
-        <meshStandardMaterial ref={leds.relay} color="#22c55e" emissive="#22c55e" emissiveIntensity={2} />
-      </mesh>
-      {/* three indicator LEDs on the front face */}
-      {[
-        { x: -0.15, ref: leds.g, col: '#22c55e' },
-        { x: 0.2, ref: leds.a, col: '#f59e0b' },
-        { x: 0.55, ref: leds.r, col: '#ef4444' },
-      ].map((l, i) => (
-        <group key={i} position={[ex + l.x, ey + 0.05, ez + 0.41]}>
-          <Cyl r={0.075} len={0.03} pos={[0, 0, 0]} axis="z" color="#27272a" cast={false} />
-          <mesh position={[0, 0, 0.03]}>
-            <sphereGeometry args={[0.055, 16, 16]} />
-            <meshStandardMaterial ref={l.ref} color={l.col} emissive={l.col} emissiveIntensity={0.1} />
-          </mesh>
-        </group>
-      ))}
-      {/* 12 V enclosed adapter */}
-      <Box size={[0.8, 0.26, 0.5]} pos={[-1.9, FLOOR_Y + 0.13, 2.3]} color="#27272a" metal={0.2} rough={0.7} />
-      <Cable points={CABLE_SUPPLY} radius={0.025} />
     </group>
   );
 });
@@ -182,17 +79,23 @@ function makeBrushedTexture(): THREE.CanvasTexture {
 }
 
 // ------------------------------------------------------------------ vibrating machine + rotating group
-const Machine = memo(function Machine({ sim, slowMo, leds }: { sim: Simulator; slowMo: number; leds: EdgeLedRefs }) {
+interface MachineProps {
+  sim: Simulator;
+  slowMo: number;
+  kit: SensorKit;
+  hostRef: RefObject<THREE.Group>;
+}
+const Machine = memo(function Machine({ sim, slowMo, kit, hostRef }: MachineProps) {
   const mach = useRef<THREE.Group>(null);
   const wob = useRef<THREE.Group>(null);
   const rot = useRef<THREE.Group>(null);
-  const ring = useRef<THREE.Mesh>(null);
   const massGrp = useRef<THREE.Group>(null);
   const angle = useRef(0);
   const slowRef = useRef(slowMo);
   slowRef.current = slowMo;
+  const braid = useBraidTexture();
 
-  // one shared material for the can and its fins, so the heat map lights the whole housing
+  // one shared material for the can and its fins, so the heat map lights the whole housing (and keeps working in X-ray)
   const motorMat = useMemo(() => {
     return new THREE.MeshStandardMaterial({
       color: '#2b4a52', metalness: 0.7, roughness: 0.42, roughnessMap: makeBrushedTexture(),
@@ -235,7 +138,7 @@ const Machine = memo(function Machine({ sim, slowMo, leds }: { sim: Simulator; s
       wob.current.rotation.z = tilt * Math.cos(angle.current);
     }
 
-    // heat map: slate/teal until ~40 C, warm tint to 60 C, then orange to red (glowing) up to 95 C
+    // heat map: slate/teal until ~40 C, warm tint to 60 C, then orange to red up to 95 C (range retuned in Phase 3, D12)
     const T = L.temp;
     let k = 0;
     if (T > 60) k = 0.25 + 0.75 * THREE.MathUtils.clamp((T - 60) / 35, 0, 1);
@@ -246,124 +149,104 @@ const Machine = memo(function Machine({ sim, slowMo, leds }: { sim: Simulator; s
     motorMat.emissiveIntensity = 0.2 + 2.1 * Math.pow(k, 1.6);
     motorMat.color.copy(col.baseCool).lerp(col.baseHot, k * 0.6);
 
-    // pulsing sensor ring
-    if (ring.current) {
-      const s = 1 + 0.18 * Math.sin(t * 6);
-      ring.current.scale.set(s, s, s);
-    }
-
     // eccentric mass: size follows the slider and it flexes radially when the rotor is shaking
     if (massGrp.current) {
       const sc = 0.55 + (0.9 * (L.massG - C.massMin)) / (C.massMax - C.massMin);
       massGrp.current.scale.set(sc, sc, sc);
       massGrp.current.position.y = 0.4 * (1 + 0.05 * (vib / 8) * Math.sin(t * 19));
     }
-
-    // indicator LEDs
-    const st = L.state;
-    const blink = Math.sin(t * 12) > 0;
-    if (leds.g.current) leds.g.current.emissiveIntensity = st === 'NORMAL' ? 2.4 : 0.08;
-    if (leds.a.current) leds.a.current.emissiveIntensity = st === 'EARLY' ? 2.4 : 0.08;
-    if (leds.r.current) leds.r.current.emissiveIntensity = st === 'CRITICAL' ? (blink ? 3 : 0.2) : 0.08;
-    if (leds.relay.current) {
-      leds.relay.current.color.set(L.relayClosed ? '#22c55e' : '#ef4444');
-      leds.relay.current.emissive.set(L.relayClosed ? '#22c55e' : '#ef4444');
-    }
   });
 
   const holeAngles = useMemo(() => Array.from({ length: 8 }, (_, i) => (i / 8) * Math.PI * 2), []);
+  const m = BENCH_MOUNTS;
 
   return (
     <group ref={mach}>
-      {/* motor cradle */}
-      <Box size={[1.0, 0.43, 0.9]} pos={[-1.8, 0.215, 0]} color="#52525b" metal={0.5} rough={0.5} />
+      {/* ---------------- host machine (dimmed by X-ray) ---------------- */}
+      <group ref={hostRef}>
+        {/* motor cradle (bolted to the base plate) */}
+        <Box size={[1.0, 0.43 - PLATE_TOP, 0.9]} pos={[-1.8, PLATE_TOP + (0.43 - PLATE_TOP) / 2, 0]} color="#52525b" metal={0.5} rough={0.5} />
 
-      {/* 12 V DC motor can */}
-      <mesh position={[-1.8, SHAFT_Y, 0]} rotation={[0, 0, Math.PI / 2]} castShadow receiveShadow>
-        <cylinderGeometry args={[0.42, 0.42, 1.3, 48]} />
-        <primitive object={motorMat} attach="material" />
-      </mesh>
-      {/* stylised cooling fins around the housing (shares the heat-map material) */}
-      {Array.from({ length: 24 }, (_, i) => (
-        <group key={i} position={[-1.8, SHAFT_Y, 0]} rotation={[(i / 24) * Math.PI * 2, 0, 0]}>
-          <mesh position={[0.02, 0.45, 0]} castShadow>
-            <boxGeometry args={[0.9, 0.1, 0.022]} />
-            <primitive object={motorMat} attach="material" />
-          </mesh>
-        </group>
-      ))}
-      {/* rear cap with vent slits */}
-      <Cyl r={0.45} len={0.14} pos={[-2.52, SHAFT_Y, 0]} axis="x" color="#18232a" metal={0.55} rough={0.4} />
-      {Array.from({ length: 8 }, (_, i) => (
-        <group key={i} position={[-2.6, SHAFT_Y, 0]} rotation={[(i / 8) * Math.PI * 2, 0, 0]}>
-          <Box size={[0.02, 0.15, 0.05]} pos={[0, 0.27, 0]} color="#05080a" cast={false} />
-        </group>
-      ))}
-      {/* front flange + bolts */}
-      <Cyl r={0.5} len={0.06} pos={[-1.15, SHAFT_Y, 0]} axis="x" color="#3f3f46" metal={0.7} rough={0.35} />
-      {[0, 1, 2, 3].map((i) => {
-        const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
-        return <Cyl key={i} r={0.03} len={0.05} pos={[-1.11, SHAFT_Y + 0.4 * Math.cos(a), 0.4 * Math.sin(a)]} axis="x" color="#d4d4d8" metal={0.9} rough={0.3} seg={6} cast={false} />;
-      })}
-      {/* terminal cap with leads */}
-      <Box size={[0.3, 0.1, 0.22]} pos={[-2.1, SHAFT_Y + 0.52, 0]} color="#0a0a0a" metal={0.1} rough={0.8} />
-      <Cable points={CABLE_MOTOR_LEAD} radius={0.028} />
+        {/* 12 V DC motor can */}
+        <mesh position={[-1.8, SHAFT_Y, 0]} rotation={[0, 0, Math.PI / 2]} castShadow receiveShadow>
+          <cylinderGeometry args={[0.42, 0.42, 1.3, 48]} />
+          <primitive object={motorMat} attach="material" />
+        </mesh>
+        {/* stylised cooling fins around the housing (shares the heat-map material) */}
+        {Array.from({ length: 24 }, (_, i) => (
+          <group key={i} position={[-1.8, SHAFT_Y, 0]} rotation={[(i / 24) * Math.PI * 2, 0, 0]}>
+            <mesh position={[0.02, 0.45, 0]} castShadow>
+              <boxGeometry args={[0.9, 0.1, 0.022]} />
+              <primitive object={motorMat} attach="material" />
+            </mesh>
+          </group>
+        ))}
+        {/* rear cap with vent slits */}
+        <Cyl r={0.45} len={0.14} pos={[-2.52, SHAFT_Y, 0]} axis="x" color="#18232a" metal={0.55} rough={0.4} />
+        {Array.from({ length: 8 }, (_, i) => (
+          <group key={i} position={[-2.6, SHAFT_Y, 0]} rotation={[(i / 8) * Math.PI * 2, 0, 0]}>
+            <Box size={[0.02, 0.15, 0.05]} pos={[0, 0.27, 0]} color="#05080a" cast={false} />
+          </group>
+        ))}
+        {/* front flange + bolts */}
+        <Cyl r={0.5} len={0.06} pos={[-1.15, SHAFT_Y, 0]} axis="x" color="#3f3f46" metal={0.7} rough={0.35} />
+        {[0, 1, 2, 3].map((i) => {
+          const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+          return <Cyl key={i} r={0.03} len={0.05} pos={[-1.11, SHAFT_Y + 0.4 * Math.cos(a), 0.4 * Math.sin(a)]} axis="x" color="#d4d4d8" metal={0.9} rough={0.3} seg={6} cast={false} />;
+        })}
+        {/* terminal cap and the motor power lead (through the current sensor to the cut-off in the node) */}
+        <Box size={[0.3, 0.1, 0.22]} pos={[-2.1, SHAFT_Y + 0.52, 0]} color="#0a0a0a" metal={0.1} rough={0.8} />
+        <Cable points={HARNESS.power} radius={0.026} color="#18181b" />
 
-      {/* DS18B20 probe on a clamp band */}
-      <mesh position={[-1.85, SHAFT_Y, 0]} rotation={[0, Math.PI / 2, 0]} castShadow>
-        <torusGeometry args={[0.52, 0.022, 10, 48]} />
-        <meshStandardMaterial color="#9ca3af" metalness={0.85} roughness={0.3} />
-      </mesh>
-      <Cyl r={0.035} len={0.2} pos={[-1.85, SHAFT_Y + 0.6, 0]} color="#e5e7eb" metal={0.9} rough={0.25} />
-      <Cable points={CABLE_TEMP} radius={0.012} color="#d4d4d8" />
+        {/* pillow-block bearing (UCP204-style) */}
+        <Box size={[0.6, 0.12, 1.0]} pos={[0.5, PLATE_TOP + 0.06, 0]} color="#3f3f46" metal={0.6} rough={0.45} />
+        <Box size={[0.36, 0.62, 0.5]} pos={[0.5, 0.47, 0]} color="#52525b" metal={0.55} rough={0.45} />
+        <Cyl r={0.24} len={0.4} pos={[0.5, SHAFT_Y, 0]} axis="x" color="#3f3f46" metal={0.6} rough={0.4} />
+        <Cyl r={0.14} len={0.44} pos={[0.5, SHAFT_Y, 0]} axis="x" color="#a1a1aa" metal={0.85} rough={0.3} />
+        {[-0.38, 0.38].map((z) => (
+          <Cyl key={z} r={0.04} len={0.08} pos={[0.5, PLATE_TOP + 0.16, z]} color="#d4d4d8" metal={0.9} rough={0.3} seg={6} cast={false} />
+        ))}
 
-      {/* pillow-block bearing (UCP204-style) */}
-      <Box size={[0.6, 0.12, 1.0]} pos={[0.5, 0.06, 0]} color="#3f3f46" metal={0.6} rough={0.45} />
-      <Box size={[0.36, 0.62, 0.5]} pos={[0.5, 0.43, 0]} color="#52525b" metal={0.55} rough={0.45} />
-      <Cyl r={0.24} len={0.4} pos={[0.5, SHAFT_Y, 0]} axis="x" color="#3f3f46" metal={0.6} rough={0.4} />
-      <Cyl r={0.14} len={0.44} pos={[0.5, SHAFT_Y, 0]} axis="x" color="#a1a1aa" metal={0.85} rough={0.3} />
-      {[-0.38, 0.38].map((z) => (
-        <Cyl key={z} r={0.04} len={0.08} pos={[0.5, 0.16, z]} color="#d4d4d8" metal={0.9} rough={0.3} seg={6} cast={false} />
-      ))}
-
-      {/* MPU6050 module on the bearing housing, pulsing cyan ring */}
-      <Box size={[0.26, 0.03, 0.18]} pos={[0.5, SHAFT_Y + 0.27, 0]} color="#1d4ed8" metal={0.2} rough={0.5} cast={false} />
-      <Box size={[0.08, 0.02, 0.08]} pos={[0.5, SHAFT_Y + 0.295, 0]} color="#0a0a0a" cast={false} />
-      <mesh ref={ring} position={[0.5, SHAFT_Y + 0.3, 0]} rotation={[Math.PI / 2, 0, 0]}>
-        <torusGeometry args={[0.18, 0.012, 8, 40]} />
-        <meshStandardMaterial color="#22d3ee" emissive="#22d3ee" emissiveIntensity={2.2} />
-      </mesh>
-      <Cable points={CABLE_ACCEL} radius={0.012} color="#2563eb" />
-
-      {/* ACS712-type current module (optional, drawn translucent) */}
-      <Box size={[0.38, 0.04, 0.26]} pos={[-0.6, 0.14, 0.72]} color="#b91c1c" opacity={0.7} metal={0.1} rough={0.6} cast={false} />
-      <Box size={[0.1, 0.07, 0.08]} pos={[-0.72, 0.19, 0.72]} color="#2563eb" opacity={0.7} cast={false} />
-      <Box size={[0.1, 0.07, 0.08]} pos={[-0.48, 0.19, 0.72]} color="#2563eb" opacity={0.7} cast={false} />
-      <Cable points={CABLE_CURRENT} radius={0.012} color="#a78bfa" />
-
-      {/* rotor: wobble group (precession) > rotating group (shaft, keyway, flywheel, eccentric mass) */}
-      <group ref={wob} position={[0, SHAFT_Y, 0]}>
-        <group ref={rot}>
-          <Cyl r={0.045} len={3.1} pos={[0.4, 0, 0]} axis="x" color="#e5e7eb" metal={0.9} rough={0.25} />
-          <Box size={[0.4, 0.02, 0.03]} pos={[-0.7, 0.045, 0]} color="#52525b" cast={false} />
-          <Cyl r={0.58} len={0.1} pos={[1.4, 0, 0]} axis="x" color="#a8b0ba" metal={0.8} rough={0.35} seg={64} />
-          <Cyl r={0.12} len={0.14} pos={[1.4, 0, 0]} axis="x" color="#71717a" metal={0.8} rough={0.3} />
-          {holeAngles.map((a, i) => (
-            <Cyl key={i} r={0.035} len={0.11} pos={[1.4, 0.4 * Math.cos(a), 0.4 * Math.sin(a)]} axis="x" color="#0a0a0a" metal={0} rough={1} seg={12} cast={false} />
-          ))}
-          <group ref={massGrp} position={[1.49, 0.4, 0]}>
-            <Cyl r={0.05} len={0.14} pos={[0, 0, 0]} axis="x" color="#f97316" metal={0.3} rough={0.5} seg={24} />
-            <Cyl r={0.085} len={0.06} pos={[0.05, 0, 0]} axis="x" color="#ea580c" metal={0.35} rough={0.45} seg={6} />
+        {/* rotor: wobble group (precession) > rotating group (shaft, keyway, flywheel, eccentric mass) */}
+        <group ref={wob} position={[0, SHAFT_Y, 0]}>
+          <group ref={rot}>
+            <Cyl r={0.045} len={3.1} pos={[0.4, 0, 0]} axis="x" color="#e5e7eb" metal={0.9} rough={0.25} />
+            <Box size={[0.4, 0.02, 0.03]} pos={[-0.7, 0.045, 0]} color="#52525b" cast={false} />
+            <Cyl r={0.58} len={0.1} pos={[1.4, 0, 0]} axis="x" color="#a8b0ba" metal={0.8} rough={0.35} seg={64} />
+            <Cyl r={0.12} len={0.14} pos={[1.4, 0, 0]} axis="x" color="#71717a" metal={0.8} rough={0.3} />
+            {holeAngles.map((a, i) => (
+              <Cyl key={i} r={0.035} len={0.11} pos={[1.4, 0.4 * Math.cos(a), 0.4 * Math.sin(a)]} axis="x" color="#0a0a0a" metal={0} rough={1} seg={12} cast={false} />
+            ))}
+            <group ref={massGrp} position={[1.49, 0.4, 0]}>
+              <Cyl r={0.05} len={0.14} pos={[0, 0, 0]} axis="x" color="#f97316" metal={0.3} rough={0.5} seg={24} />
+              <Cyl r={0.085} len={0.06} pos={[0.05, 0, 0]} axis="x" color="#ea580c" metal={0.35} rough={0.45} seg={6} />
+            </group>
           </group>
         </group>
+
+        {/* transparent acrylic guard around the flywheel */}
+        <mesh position={[1.4, SHAFT_Y, 0]}>
+          <boxGeometry args={[0.5, 1.5, 1.5]} />
+          <meshPhysicalMaterial color="#cbd5e1" transparent opacity={0.06} roughness={0.1} metalness={0} depthWrite={false} />
+          <Edges color="#52525b" />
+        </mesh>
       </group>
 
-      {/* transparent acrylic guard around the flywheel */}
-      <mesh position={[1.4, SHAFT_Y, 0]}>
-        <boxGeometry args={[0.5, 1.5, 1.5]} />
-        <meshPhysicalMaterial color="#9bd1ff" transparent opacity={0.07} roughness={0.1} metalness={0} depthWrite={false} />
-        <Edges color="#7dd3fc" />
-      </mesh>
+      {/* ---------------- Machynex sensor hardware (stays opaque in X-ray) ---------------- */}
+      <VibrationPuck mount={m.puck} />
+      <Cable points={HARNESS.puck} radius={0.022} color="#ffffff" texture={braid} metal={0.6} rough={0.4} />
+
+      {kit === 'bench' && (
+        <>
+          <TempProbe mount={m.temp} />
+          <Cable points={HARNESS.tempProbe} radius={0.012} color="#d4d4d8" />
+        </>
+      )}
+
+      <CurrentSensor mount={m.current} kit={kit} />
+      {kit === 'bench'
+        ? <Cable points={HARNESS_BENCH_SIGNAL} radius={0.011} color="#52525b" />
+        : <Cable points={HARNESS_INDUSTRIAL.ctOut} radius={0.013} color="#111113" />}
     </group>
   );
 });
@@ -372,10 +255,10 @@ const Machine = memo(function Machine({ sim, slowMo, leds }: { sim: Simulator; s
 const ANCHORS: { id: string; pos: V3 }[] = [
   { id: 'motor', pos: [-2.2, 1.0, 0.45] },
   { id: 'temp', pos: [-1.85, 1.45, 0] },
-  { id: 'mpu', pos: [0.5, 1.2, 0] },
-  { id: 'current', pos: [-0.6, 0.2, 0.72] },
+  { id: 'mpu', pos: [0.5, 1.3, 0] },
+  { id: 'current', pos: [-0.4, 0.14, 0.62] },
   { id: 'flywheel', pos: [1.4, 1.45, 0] },
-  { id: 'edge', pos: [0.2, 0.3, 2.4] },
+  { id: 'edge', pos: [NODE.center[0], 0.2, NODE.center[2]] },
 ];
 
 function LabelProjector({ registry }: { registry: { current: LabelRegistry } }) {
@@ -439,7 +322,7 @@ function CameraDirector({ shot }: { shot: CameraShot | null }) {
       if (camera.position.distanceTo(goalPos) < 0.02 && controls.target.distanceTo(goalTarget) < 0.02) active.current = false;
     } else {
       controls.target.x = THREE.MathUtils.clamp(controls.target.x, -3.5, 3.5);
-      controls.target.y = THREE.MathUtils.clamp(controls.target.y, 0, 2.2);
+      controls.target.y = THREE.MathUtils.clamp(controls.target.y, -0.2, 2.2);
       controls.target.z = THREE.MathUtils.clamp(controls.target.z, -2.5, 3.0);
     }
   });
@@ -464,12 +347,31 @@ function EnvLight() {
   return null;
 }
 
-function World({ sim, slowMo, registry, shot, walkActive }: { sim: Simulator; slowMo: number; registry: { current: LabelRegistry }; shot: CameraShot | null; walkActive: boolean }) {
+interface WorldProps {
+  sim: Simulator;
+  slowMo: number;
+  registry: { current: LabelRegistry };
+  shot: CameraShot | null;
+  walkActive: boolean;
+  kit: SensorKit;
+  xray: boolean;
+}
+
+function World({ sim, slowMo, registry, shot, walkActive, kit, xray }: WorldProps) {
   const g = useRef<THREE.MeshStandardMaterial>(null);
   const a = useRef<THREE.MeshStandardMaterial>(null);
   const r = useRef<THREE.MeshStandardMaterial>(null);
   const relay = useRef<THREE.MeshStandardMaterial>(null);
-  const leds: EdgeLedRefs = useMemo(() => ({ g, a, r, relay }), []);
+  const leds: NodeLeds = useMemo(() => ({ g, a, r, relay }), []);
+  const baseRef = useRef<THREE.Group>(null);
+  const hostRef = useRef<THREE.Group>(null);
+
+  // X-ray: host machine + rig become 25% wireframe (materials mutated in place; no remount, heat map unaffected)
+  useEffect(() => {
+    applyXray(baseRef.current, xray);
+    applyXray(hostRef.current, xray);
+  }, [xray]);
+
   return (
     <>
       <color attach="background" args={['#09090b']} />
@@ -487,13 +389,24 @@ function World({ sim, slowMo, registry, shot, walkActive }: { sim: Simulator; sl
       </mesh>
       <gridHelper args={[40, 40, '#1e293b', '#12151c']} position={[0, FLOOR_Y, 0]} />
 
-      <BaseRig />
-      <EdgeBox leds={leds} />
-      <Machine sim={sim} slowMo={slowMo} leds={leds} />
+      <group ref={baseRef}><BaseRig /></group>
+      <Machine sim={sim} slowMo={slowMo} kit={kit} hostRef={hostRef} />
+
+      {/* static Machynex hardware: edge node, 12 V adapter, (concept kit) IR pod on its bracket */}
+      <EdgeNode sim={sim} kit={kit} xray={xray} leds={leds} />
+      <Box size={[0.8, 0.26, 0.5]} pos={[-1.9, FLOOR_Y + 0.13, 2.3]} color="#27272a" metal={0.2} rough={0.7} />
+      <Cable points={HARNESS.supply} radius={0.025} />
+      {kit === 'industrial' && (
+        <>
+          <IrPod mount={BENCH_MOUNTS.temp} />
+          <Cable points={HARNESS_INDUSTRIAL.irTemp} radius={0.013} color="#d4d4d8" />
+        </>
+      )}
+
       <TripFx sim={sim} />
       <LabelProjector registry={registry} />
 
-      <OrbitControls makeDefault enabled={!walkActive} enableDamping dampingFactor={0.08} minDistance={4} maxDistance={18} minPolarAngle={0.15} maxPolarAngle={Math.PI * 0.49} rotateSpeed={0.7} target={HOME_TARGET} />
+      <OrbitControls makeDefault enabled={!walkActive} enableDamping dampingFactor={0.08} minDistance={1.2} maxDistance={18} minPolarAngle={0.15} maxPolarAngle={Math.PI * 0.49} rotateSpeed={0.7} target={HOME_TARGET} />
       <CameraDirector shot={shot} />
     </>
   );
@@ -515,6 +428,10 @@ interface ViewportProps {
   walk: WalkState;
   onStopWalk: () => void;
   slowMo: number;
+  kit: SensorKit;
+  xray: boolean;
+  selected: HardwareId | null;
+  onSelect: (id: HardwareId) => void;
 }
 
 function IconButton({ label, onClick, children }: { label: string; onClick: () => void; children: ReactNode }) {
@@ -530,15 +447,18 @@ function IconButton({ label, onClick, children }: { label: string; onClick: () =
   );
 }
 
-export function Viewport({ sim, snap, paused, onTogglePause, muted, onToggleMute, alarms, onToggleAlarms, onUserGesture, shot, onFocus, walk, onStopWalk, slowMo }: ViewportProps) {
-  // the registry is still filled by LabelProjector: the minimap reads the camera from it, and Phase 2 hotspots will use the points
+export function Viewport({ sim, snap, paused, onTogglePause, muted, onToggleMute, alarms, onToggleAlarms, onUserGesture, shot, onFocus, walk, onStopWalk, slowMo, kit, xray, selected, onSelect }: ViewportProps) {
+  // the registry is filled by LabelProjector: the minimap reads the camera from it
   const registry = useRef<LabelRegistry>({ points: {}, cam: { x: 0, z: 0, tx: 0, tz: 0 }, size: { w: 1, h: 1 } });
+  const pick = useMemo(() => ({ selected, onSelect }), [selected, onSelect]);
 
   return (
     <div className="relative h-full w-full bg-canvas" onPointerDown={onUserGesture}>
       <CanvasBoundary>
         <Canvas shadows dpr={[1, 1.75]} camera={{ position: HOME_POS, fov: 38, near: 0.1, far: 100 }} gl={{ antialias: true }}>
-          <World sim={sim} slowMo={slowMo} registry={registry} shot={shot} walkActive={walk.active} />
+          <PickContext.Provider value={pick}>
+            <World sim={sim} slowMo={slowMo} registry={registry} shot={shot} walkActive={walk.active} kit={kit} xray={xray} />
+          </PickContext.Provider>
         </Canvas>
       </CanvasBoundary>
 
@@ -559,6 +479,16 @@ export function Viewport({ sim, snap, paused, onTogglePause, muted, onToggleMute
           <p className="mt-1 text-xs leading-snug text-zinc-400">{walk.caption}</p>
           <div className="mt-2 h-px w-full bg-zinc-800"><div className="h-px bg-zinc-300" style={{ width: `${Math.round(walk.progress * 100)}%` }} /></div>
         </div>
+      )}
+
+      {kit === 'industrial' && (
+        <div className="pointer-events-none absolute right-3 top-3 max-w-[18rem] rounded-md border border-line bg-panel px-3 py-2 text-[11px] leading-snug text-zinc-400" role="note">
+          <div className="font-mono text-warn">CONCEPT · not in the proposed bill of materials</div>
+          <div className="mt-0.5">Industrial-retrofit kit preview on the DC bench rig. The CT clamp is AC only and could not measure this DC lead.</div>
+        </div>
+      )}
+      {xray && (
+        <div className="font-mono pointer-events-none absolute left-3 top-12 rounded-md border border-line bg-panel px-2 py-1 text-[11px] text-zinc-400">X-RAY · host machine at 25 %</div>
       )}
 
       <div className="pointer-events-auto absolute bottom-3 left-3">

@@ -13,7 +13,7 @@ const DOTS: { id: ShotName; x: number; z: number; label: string }[] = [
   { id: 'temp', x: -1.85, z: 0.0, label: 'DS18B20' },
   { id: 'mpu', x: 0.5, z: 0, label: 'MPU6050' },
   { id: 'flywheel', x: 1.4, z: 0, label: 'Flywheel' },
-  { id: 'current', x: -0.6, z: 0.72, label: 'Current (opt.)' },
+  { id: 'current', x: -0.4, z: 0.62, label: 'Current sensor' },
   { id: 'edge', x: 0.2, z: 2.35, label: 'ESP32 + cut-off' },
 ];
 
