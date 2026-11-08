@@ -78,7 +78,8 @@ export class AudioEngine {
     if (!this.ctx || !this.hum) return;
     const t = this.ctx.currentTime;
     const h = this.hum;
-    const f = 40 + (115 * Math.min(rpm, 2200)) / 1450;
+    // pitch follows rpm up to the pump's 2900 rpm (cap 3300); gain is bounded below, so no clipping at any speed
+    const f = 40 + (115 * Math.min(rpm, 3300)) / 1450;
     const running = Math.min(1, rpm / 250);
     const level = this.muted ? 0 : running * (0.05 + 0.006 * Math.min(vib, 9));
     h.o1.frequency.setTargetAtTime(f, t, 0.06);

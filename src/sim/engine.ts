@@ -1,6 +1,7 @@
 import { CONFIG as C } from './config';
 import { ASSETS, CONCEPT_ASSET_TAG, DEFAULT_ASSET } from './assets';
 import type { AssetId, AssetProfile } from './assets';
+import type { Capture } from './exporter';
 
 export type HealthState = 'NORMAL' | 'EARLY' | 'CRITICAL';
 export type PresetName = 'baseline' | 'progressive' | 'shock' | 'critical';
@@ -412,8 +413,16 @@ export class Simulator {
   }
 
   /** full telemetry capture (2 Hz packets) and the event log, for export */
-  getCapture(): { packets: PacketRecord[]; events: LogLine[] } {
-    return { packets: this.packets.slice(), events: this.eventLog.slice() };
+  getCapture(): Capture {
+    const P = this.profile;
+    return {
+      packets: this.packets.slice(),
+      events: this.eventLog.slice(),
+      asset: {
+        id: P.id, scope: P.scope, name: P.name, faultName: P.faultName, conceptTag: P.scope === 'concept' ? CONCEPT_ASSET_TAG : null,
+        thresholds: { vibWarn: P.th.vibWarn, vibCrit: P.th.vibCrit, zones: P.th.zones, tempWarn: P.th.tempWarn, tempCrit: P.th.tempCrit, curCrit: P.th.curCrit },
+      },
+    };
   }
 
   private randn(): number {
