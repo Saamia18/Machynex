@@ -82,12 +82,12 @@ export function MachineHardware({ rig, kit, braid }: { rig: RigLayout; kit: Sens
   const ct = useMemo(() => ctRoute(m.current), [m.current]);
   return (
     <>
-      <VibrationPuck mount={m.puck} />
+      <VibrationPuck mount={m.puck} kit={kit} />
       <Cable points={rig.puckRoute} radius={0.022} color="#ffffff" texture={braid} metal={0.6} rough={0.4} />
       {kit === 'bench' && (
         <>
           <TempProbe mount={m.temp} />
-          <Cable points={HARNESS.tempProbe} radius={0.012} color="#d4d4d8" />
+          <Cable points={HARNESS.tempProbe} radius={0.012} color="#111113" />
         </>
       )}
       <CurrentSensor mount={m.current} kit={kit} />
