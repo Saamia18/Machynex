@@ -18,11 +18,15 @@ export function useAnomaly(sim: Simulator, snap: Snapshot, appendLogs: (l: { kin
   const [view, setView] = useState<AnomalyView>({ status: null, training: true, model: null });
   const mon = useRef<AnomalyMonitor | null>(null);
   const lastT = useRef(-1);
+  // latest score: written by the snapshot effect, read on the next render (snapshots re-render the app at 10 Hz).
+  // No setState in that effect, so slow frames cannot chain nested passive updates (React's update-depth warning).
+  const statusRef = useRef<AnomalyView['status']>(null);
   const asset: AssetId = snap.asset;
 
   useEffect(() => {
     let cancelled = false;
     mon.current = null;
+    statusRef.current = null;
     setView({ status: null, training: true, model: null });
     const id = window.setTimeout(() => {
       const model = trainModel(asset);
@@ -41,10 +45,8 @@ export function useAnomaly(sim: Simulator, snap: Snapshot, appendLogs: (l: { kin
     lastT.current = snap.t;
     const events = m.update(extractFeatures(sim), snap.t);
     if (events.length) appendLogs(events.map((e) => ({ kind: e.kind === 'rejected' ? 'FILTER' : 'STATE', t: e.t, text: e.text })));
-    // capture now: the updater runs later, when an asset switch may already have cleared mon.current
-    const status = m.status;
-    setView((v) => ({ ...v, status }));
+    statusRef.current = m.status;
   }, [snap, sim, appendLogs]);
 
-  return view;
+  return statusRef.current === view.status ? view : { ...view, status: statusRef.current };
 }
