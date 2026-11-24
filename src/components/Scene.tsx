@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Edges, OrbitControls } from '@react-three/drei';
@@ -22,6 +22,9 @@ import { Minimap } from './Minimap';
 import { TripFx } from './Fx';
 import { CanvasBoundary } from './CanvasBoundary';
 import { Box, Cable, Cyl, PickContext, applyXray, useBraidTexture } from './hardware/primitives';
+import { InspectFade } from './InspectFade';
+import { HardwareSuiteOverlay } from './HardwareSuiteOverlay';
+import { isAcMachine } from '../sim/inspection';
 import { EdgeNode } from './hardware/EdgeNode';
 import type { NodeLeds } from './hardware/EdgeNode';
 import { IrPod } from './hardware/TempSensor';
@@ -279,6 +282,9 @@ interface ControlsLike {
 function CameraDirector({ shot }: { shot: CameraShot | null }) {
   const controls = useThree((s) => s.controls) as unknown as ControlsLike | null;
   const camera = useThree((s) => s.camera);
+  const size = useThree((s) => s.size);
+  const sizeRef = useRef(size);
+  sizeRef.current = size;
   const goalPos = useMemo(() => new THREE.Vector3(), []);
   const goalTarget = useMemo(() => new THREE.Vector3(), []);
   const active = useRef(false);
@@ -287,8 +293,19 @@ function CameraDirector({ shot }: { shot: CameraShot | null }) {
     if (!shot) return;
     goalPos.set(shot.pos[0], shot.pos[1], shot.pos[2]);
     goalTarget.set(shot.target[0], shot.target[1], shot.target[2]);
+    // inspection: slide camera + target sideways so the part sits in the middle of the area right of the overlay
+    const w = sizeRef.current.width;
+    if (shot.panelPx && w > 0 && camera instanceof THREE.PerspectiveCamera) {
+      const fwd = goalTarget.clone().sub(goalPos);
+      const dist = fwd.length();
+      const right = fwd.clone().cross(new THREE.Vector3(0, 1, 0)).normalize();
+      const halfW = dist * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * (w / Math.max(1, sizeRef.current.height));
+      const p = Math.min(0.45, shot.panelPx / w); // NDC offset of the free area's centre
+      goalPos.addScaledVector(right, -halfW * p);
+      goalTarget.addScaledVector(right, -halfW * p);
+    }
     active.current = true;
-  }, [shot, goalPos, goalTarget]);
+  }, [shot, goalPos, goalTarget, camera]);
 
   useEffect(() => {
     if (!controls || !controls.addEventListener) return;
@@ -371,6 +388,8 @@ function World({ sim, slowMo, registry, shot, walkActive, kit, xray, asset }: Wo
   const leds: NodeLeds = useMemo(() => ({ g, a, r, relay }), []);
   const baseRef = useRef<THREE.Group>(null);
   const hostRef = useRef<THREE.Group>(null);
+  const fadeRef = useRef<THREE.Group>(null);
+  const { selected } = useContext(PickContext);
 
   // X-ray: host machine + rig become 25% wireframe (materials mutated in place; no remount, heat map unaffected)
   useEffect(() => {
@@ -398,24 +417,28 @@ function World({ sim, slowMo, registry, shot, walkActive, kit, xray, asset }: Wo
       </mesh>
       <gridHelper args={[40, 40, '#1e293b', '#12151c']} position={[0, FLOOR_Y, 0]} />
 
-      <group ref={baseRef}><BaseRig /></group>
-      <ActiveMachine asset={asset} sim={sim} slowMo={slowMo} kit={kit} hostRef={hostRef} />
+      {/* everything that fades to 16% while one part is inspected */}
+      <group ref={fadeRef}>
+        <group ref={baseRef}><BaseRig /></group>
+        <ActiveMachine asset={asset} sim={sim} slowMo={slowMo} kit={kit} hostRef={hostRef} />
 
-      {/* static Machynex hardware: edge node, 12 V adapter, (concept kit) IR pod on its bracket */}
-      <EdgeNode sim={sim} kit={kit} xray={xray} leds={leds} />
-      <Box size={[0.8, 0.26, 0.5]} pos={[-1.9, FLOOR_Y + 0.13, 2.3]} color="#27272a" metal={0.2} rough={0.7} />
-      <Cable points={HARNESS.supply} radius={0.025} />
-      {kit === 'industrial' && (
-        <group key={asset}>
-          <IrPod mount={rig.mounts.temp} base={rig.irBase} barrelY={rig.irBarrelY} />
-          <Cable points={irCable} radius={0.013} color="#d4d4d8" />
-        </group>
-      )}
+        {/* static Machynex hardware: edge node, 12 V adapter, (concept kit) IR pod on its bracket */}
+        <EdgeNode sim={sim} kit={kit} xray={xray} leds={leds} acMachine={isAcMachine(asset)} />
+        <Box size={[0.8, 0.26, 0.5]} pos={[-1.9, FLOOR_Y + 0.13, 2.3]} color="#27272a" metal={0.2} rough={0.7} />
+        <Cable points={HARNESS.supply} radius={0.025} />
+        {kit === 'industrial' && (
+          <group key={asset}>
+            <IrPod mount={rig.mounts.temp} base={rig.irBase} barrelY={rig.irBarrelY} />
+            <Cable points={irCable} radius={0.013} color="#d4d4d8" />
+          </group>
+        )}
+      </group>
+      <InspectFade root={fadeRef} selected={selected} version={`${asset}|${kit}`} suspend={xray} />
 
       <TripFx sim={sim} />
       <LabelProjector registry={registry} />
 
-      <OrbitControls makeDefault enabled={!walkActive} enableDamping dampingFactor={0.08} minDistance={1.2} maxDistance={18} minPolarAngle={0.15} maxPolarAngle={Math.PI * 0.49} rotateSpeed={0.7} target={HOME_TARGET} />
+      <OrbitControls makeDefault enabled={!walkActive} enableDamping dampingFactor={0.08} minDistance={0.9} maxDistance={18} minPolarAngle={0.15} maxPolarAngle={Math.PI * 0.49} rotateSpeed={0.7} target={HOME_TARGET} />
       <CameraDirector shot={shot} />
     </>
   );
@@ -442,6 +465,11 @@ interface ViewportProps {
   selected: HardwareId | null;
   onSelect: (id: HardwareId) => void;
   onAsset: (id: AssetId) => void;
+  /** inspection mode: re-assemble and leave */
+  onExitInspect: () => void;
+  /** open the right-pane spec sheet for the inspected part */
+  onOpenSheet: () => void;
+  sheetOpen: boolean;
 }
 
 /** width of an element, tracked with ResizeObserver (0 until measured) */
@@ -471,7 +499,7 @@ function IconButton({ label, onClick, children }: { label: string; onClick: () =
   );
 }
 
-export function Viewport({ sim, snap, paused, onTogglePause, muted, onToggleMute, alarms, onToggleAlarms, onUserGesture, shot, onFocus, walk, onStopWalk, slowMo, kit, xray, selected, onSelect, onAsset }: ViewportProps) {
+export function Viewport({ sim, snap, paused, onTogglePause, muted, onToggleMute, alarms, onToggleAlarms, onUserGesture, shot, onFocus, walk, onStopWalk, slowMo, kit, xray, selected, onSelect, onAsset, onExitInspect, onOpenSheet, sheetOpen }: ViewportProps) {
   // the registry is filled by LabelProjector: the minimap reads the camera from it
   const registry = useRef<LabelRegistry>({ points: {}, cam: { x: 0, z: 0, tx: 0, tz: 0 }, size: { w: 1, h: 1 } });
   const pick = useMemo(() => ({ selected, onSelect }), [selected, onSelect]);
@@ -514,6 +542,22 @@ export function Viewport({ sim, snap, paused, onTogglePause, muted, onToggleMute
           {xray && <span className="font-mono flex h-7 items-center rounded-md border border-line bg-panel px-2 text-[11px] text-zinc-300">X-RAY</span>}
         </div>
       </div>
+
+      {/* hardware suite + inspection card (the walkthrough card takes this spot while it runs) */}
+      {!walk.active && (
+        <div className="pointer-events-none absolute bottom-[7.5rem] left-3 top-12 flex">
+          <HardwareSuiteOverlay
+            kit={kit}
+            acMachine={isAcMachine(snap.asset)}
+            selected={selected}
+            onSelect={onSelect}
+            onExit={onExitInspect}
+            onOpenSheet={onOpenSheet}
+            sheetOpen={sheetOpen}
+            live={{ state: snap.state, relayClosed: snap.relayClosed, vib: snap.vib, current: snap.current, temp: snap.temp }}
+          />
+        </div>
+      )}
 
       {walk.active && (
         <div className="pointer-events-auto absolute left-3 top-12 w-[min(28rem,calc(100%-1.5rem))] rounded-md border border-line bg-panel p-3" role="status" aria-live="polite">

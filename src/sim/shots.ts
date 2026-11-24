@@ -8,6 +8,8 @@ export interface CameraShot {
   name: ShotName;
   pos: V3;
   target: V3;
+  /** inspection mode: px covered by the left overlay; the director shifts the framing so the part sits right of it */
+  panelPx?: number;
 }
 
 export type ShotName =
